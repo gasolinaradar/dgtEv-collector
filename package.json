@@ -1,0 +1,49 @@
+{
+  "name": "@gasolinaradar/dgt-ev-collector",
+  "version": "1.0.0",
+  "description": "Collector for the official DGT EV charging station dataset (Spain) returning normalized EV charging stations",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "LEGAL.md",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gasolinaradar/dgt-ev-collector.git"
+  },
+  "homepage": "https://github.com/gasolinaradar/dgt-ev-collector#readme",
+  "bugs": {
+    "url": "https://github.com/gasolinaradar/dgt-ev-collector/issues"
+  },
+  "scripts": {
+    "test": "node --test test/collector.test.js",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "dgt",
+    "ev",
+    "charging",
+    "electrolineras",
+    "espana",
+    "spain",
+    "electric-vehicle",
+    "collector"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "axios": "^1.13.2",
+    "fast-xml-parser": "^5.10.1"
+  }
+}
