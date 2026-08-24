@@ -17,4 +17,4 @@ Los datos son información pública sujeta a las condiciones de reutilización d
 This library uses the following runtime dependencies / Esta librería usa las siguientes dependencias en tiempo de ejecución:
 
 - [axios](https://github.com/axios/axios), licensed under the MIT License (Copyright (c) 2014-present, Axios Contributors) / licenciada bajo la Licencia MIT.
-- [fast-xml-parser](https://github.com/NaturalIntelligence/fast-xml-parser), licensed under the MIT License (Copyright (c) 2017 Amit Kumar Gupta) / licenciada bajo la Licencia MIT.
+- [saxes](https://github.com/lddubeau/saxes), licensed under the ISC License (Copyright (c) Louis-Dominique Dubeau) / licenciada bajo la Licencia ISC.

@@ -24,6 +24,12 @@ Collector de Node.js para el **dataset oficial de puntos de recarga de vehículo
 - Injectable logger, HTTP client, and URL resolver.
 - Progress reporting hook for long runs.
 - Zero configuration: works with sensible defaults.
+- **Streaming parser** (`streamStations`/`collector.stream()`): the ~80+ MB XML is never
+  fully loaded into memory. It's downloaded as an HTTP stream and parsed incrementally
+  with a SAX parser (`saxes`), yielding one normalized station at a time as soon as its
+  `energyInfrastructureSite` closes. Peak memory stays roughly constant regardless of file
+  size (measured: ~19 MB heap / ~77 MB RSS streaming the full real dataset, vs. a DOM-based
+  parse that would need 100+ MB just to hold the XML as a JS string before parsing anything).
 
 **ES:**
 
@@ -85,7 +91,7 @@ const stations = await fetchStations({
 Returns an object matching the common **collector contract** used by ingestion pipelines:
 
 ```js
-{ name: 'dgt-ev', country: 'ES', fetch(context) }
+{ name: 'dgt-ev', country: 'ES', fetch(context), stream(context) }
 ```
 
 ```js
@@ -101,6 +107,34 @@ const stations = await dgtEvCollector.fetch({
   },
 });
 ```
+
+### `streamStations(options?, hooks?) → AsyncGenerator<Station>` (recommended for large runs)
+
+Downloads and parses the XML as a stream and `yield`s each normalized station as soon as
+it's ready, without ever materializing the full document or the full result array in
+memory. Backpressure is automatic: the generator only reads more of the HTTP response once
+you consume the previous `yield`, so it's safe to pair with e.g. batched DB upserts.
+
+```js
+const { streamStations } = require('@gasolinaradar/dgt-ev-collector');
+// equivalently: createDgtEvCollector(options).stream(context)
+
+let batch = [];
+for await (const station of streamStations({ logger })) {
+  batch.push(station);
+  if (batch.length >= 250) {
+    await upsertBatch(batch); // your own idempotent, batched persistence
+    batch = [];
+  }
+}
+if (batch.length > 0) {
+  await upsertBatch(batch);
+}
+```
+
+`fetchStations()` is still available and internally just drains `streamStations()` into an
+array — kept for backwards compatibility, but it re-materializes the whole dataset in
+memory, so prefer `streamStations`/`collector.stream()` for the real ~80+ MB feed.
 
 ---
 
@@ -124,9 +158,9 @@ const stations = await dgtEvCollector.fetch({
 | `logger`  | `{ info, warn, debug }`     | `console`   | Logger inyectable.                                                  |
 | `httpClient` | `{ get(url, opts) }`     | `axios`     | Cliente HTTP inyectable (útil en tests o para configuración TLS personalizada). |
 
-> **Note:** When `httpClient` is injected, the collector does not build any HTTP client itself. Pass an axios instance with your own TLS settings (e.g. `rejectUnauthorized`) if you need custom certificate validation.
+> **Note:** When `httpClient` is injected, the collector does not build any HTTP client itself. Pass an axios instance with your own TLS settings (e.g. `rejectUnauthorized`) if you need custom certificate validation. The collector requests `responseType: 'stream'`; a custom client may resolve `response.data` either as a real stream (Readable / any async-iterable of chunks) for true O(1)-memory streaming, or as a plain string/Buffer (e.g. simple test doubles) — both are supported transparently.
 
-> **Nota:** Cuando se inyecta `httpClient`, el collector no construye ningún cliente HTTP propio. Pasa una instancia de axios con tu propia configuración TLS (p. ej. `rejectUnauthorized`) si necesitas validación de certificados personalizada.
+> **Nota:** Cuando se inyecta `httpClient`, el collector no construye ningún cliente HTTP propio. Pasa una instancia de axios con tu propia configuración TLS (p. ej. `rejectUnauthorized`) si necesitas validación de certificados personalizada. El collector pide `responseType: 'stream'`; un cliente personalizado puede resolver `response.data` bien como un stream real (Readable / cualquier async-iterable de trozos) para streaming real con memoria O(1), o bien como un string/Buffer plano (p. ej. dobles de test sencillos) — ambos casos se soportan de forma transparente.
 
 ---
 
@@ -181,8 +215,8 @@ The collector accepts an optional `context.reportProgress(percent, metadata)` ca
 const stations = await dgtEvCollector.fetch({
   reportProgress(percent, metadata) {
     // percent: 5   -> requesting the dataset
-    // percent: 35  -> parsing the XML
-    // percent: 70  -> normalizing sites
+    // percent: 35  -> streaming/parsing the XML has started
+    // percent: 70  -> the whole response has been read (final sites still being yielded)
     // percent: 100 -> completed
     console.log(percent, metadata.stage);
   },
