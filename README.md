@@ -19,6 +19,7 @@ Collector de Node.js para el **dataset oficial de puntos de recarga de vehículo
 - Extracts site name, address (labeled lines), municipality, province and postal code.
 - Extracts connectors (`type`, `format`, `mode`, `maxPowerKw`, `voltageV`, `maxCurrentA`), normalizing watts to kilowatts.
 - Extracts schedule (`operatingHours.label`) and supplemental services.
+- Extracts `typeOfSite`, `authenticationMethods`, and `operator` from DGT XML.
 - Normalizes coordinates to `[longitude, latitude]` (GeoJSON order).
 - Built-in retry with exponential backoff.
 - Injectable logger, HTTP client, and URL resolver.
@@ -30,6 +31,9 @@ Collector de Node.js para el **dataset oficial de puntos de recarga de vehículo
   `energyInfrastructureSite` closes. Peak memory stays roughly constant regardless of file
   size (measured: ~19 MB heap / ~77 MB RSS streaming the full real dataset, vs. a DOM-based
   parse that would need 100+ MB just to hold the XML as a JS string before parsing anything).
+- **Reve API enrichment** (optional): enrich stations with real-time prices and availability
+  from Red Eléctrica's Reve API. Matches DGT stations to Reve locations by geographic proximity,
+  caches Reve data on disk for incremental refreshes (5 req/h rate limit).
 
 **ES:**
 
@@ -38,11 +42,15 @@ Collector de Node.js para el **dataset oficial de puntos de recarga de vehículo
 - Extrae nombre, dirección (líneas etiquetadas), municipio, provincia y código postal.
 - Extrae los conectores (`type`, `format`, `mode`, `maxPowerKw`, `voltageV`, `maxCurrentA`), normalizando vatios a kilovatios.
 - Extrae horario (`operatingHours.label`) y servicios complementarios.
+- Extrae `typeOfSite`, `authenticationMethods` y `operator` del XML de la DGT.
 - Normaliza las coordenadas a `[longitude, latitude]` (orden GeoJSON).
 - Reintentos con backoff exponencial integrados.
 - Logger, cliente HTTP y resolución de URL inyectables.
 - Hook de reporte de progreso para ejecuciones largas.
 - Cero configuración: funciona con valores por defecto sensatos.
+- **Enriquecimiento con API Reve** (opcional): enriquece estaciones con precios y disponibilidad
+  en tiempo real de la API Reve de Red Eléctrica. Relaciona estaciones DGT con ubicaciones Reve
+  por proximidad geográfica, cachea datos Reve en disco para refreshes incrementales (límite 5 req/h).
 
 ---
 
@@ -148,6 +156,7 @@ memory, so prefer `streamStations`/`collector.stream()` for the real ~80+ MB fee
 | `retries` | `number`                 | `3`     | Retry attempts before failing.                                     |
 | `logger`  | `{ info, warn, debug }`  | `console` | Injectable logger.                                              |
 | `httpClient` | `{ get(url, opts) }`  | `axios` | Injectable HTTP client (useful for tests or custom TLS settings). |
+| `enrich`  | `object`                 | `undefined` | Enrichment options for Reve API. See [Enrichment](#enrichment--enriquecimiento). |
 
 | Opción    | Tipo                        | Por defecto | Descripción                                                         |
 | --------- | --------------------------- | ----------- | ------------------------------------------------------------------- |
@@ -157,6 +166,7 @@ memory, so prefer `streamStations`/`collector.stream()` for the real ~80+ MB fee
 | `retries` | `number`                    | `3`         | Intentos de reintento antes de fallar.                              |
 | `logger`  | `{ info, warn, debug }`     | `console`   | Logger inyectable.                                                  |
 | `httpClient` | `{ get(url, opts) }`     | `axios`     | Cliente HTTP inyectable (útil en tests o para configuración TLS personalizada). |
+| `enrich`  | `object`                    | `undefined` | Opciones de enriquecimiento con API Reve. Ver [Enriquecimiento](#enrichment--enriquecimiento). |
 
 > **Note:** When `httpClient` is injected, the collector does not build any HTTP client itself. Pass an axios instance with your own TLS settings (e.g. `rejectUnauthorized`) if you need custom certificate validation. The collector requests `responseType: 'stream'`; a custom client may resolve `response.data` either as a real stream (Readable / any async-iterable of chunks) for true O(1)-memory streaming, or as a plain string/Buffer (e.g. simple test doubles) — both are supported transparently.
 
@@ -190,12 +200,37 @@ Each normalized station looks like this / Cada estación normalizada tiene esta 
       maxCurrentA: 32,
     },
   ],
+  typeOfSite: 'onstreet',           // from DGT XML, if present
+  authenticationMethods: ['rfid'],   // from DGT XML, if present
+  operator: { name: 'Wenea', website: 'www.wenea.es' }, // from DGT XML, if present
   location: {
     type: 'Point',
     coordinates: [-3.7038, 40.4168], // [longitude, latitude]
   },
-  prices: undefined,
+  prices: undefined,                 // populated by Reve enrichment
+  availability: undefined,           // populated by Reve enrichment
+  reveLocationId: undefined,         // populated by Reve enrichment
   lastUpdated: Date,
+}
+```
+
+When enriched with Reve data (`enrich.reveApiKey`), the fields are populated:
+
+```js
+{
+  // ... all DGT fields above ...
+  typeOfSite: 'onstreet',
+  operator: { name: 'Wenea', website: 'www.wenea.es' },
+  reveLocationId: 'reve-abc-123',
+  prices: [
+    { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1 },
+    { type: 'TIME', price: 0.02, currency: 'EUR', stepSize: 60 },
+  ],
+  availability: {
+    status: 'AVAILABLE',   // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | UNKNOWN
+    evseCount: 2,
+    lastUpdated: '2026-08-25T10:00:00Z',
+  },
 }
 ```
 
@@ -203,7 +238,8 @@ Notes / Notas:
 
 - `connectors` is `undefined` when a site declares no connectors.
 - Coordinates are `[longitude, latitude]` (GeoJSON order). Sites that cannot be resolved with coordinates are skipped (logged as warnings).
-- `prices` is intentionally `undefined` for EV charging sites.
+- `prices`, `availability`, and `reveLocationId` are `undefined` until enrichment is enabled.
+- `typeOfSite`, `authenticationMethods`, and `operator` are extracted from DGT XML when present.
 
 ---
 
@@ -222,6 +258,87 @@ const stations = await dgtEvCollector.fetch({
   },
 });
 ```
+
+---
+
+## Enrichment / Enriquecimiento
+
+The collector can enrich DGT stations with **real-time prices and availability** from
+[Red Eléctrica's Reve API](https://www.mapareve.es/). This requires a free API key
+(request at [mapareve.es/api-contacto](https://www.mapareve.es/api-contacto)).
+
+El collector puede enriquecer las estaciones DGT con **precios y disponibilidad en tiempo real**
+desde la [API Reve de Red Eléctrica](https://www.mapareve.es/). Requiere una API key gratuita
+(solicitar en [mapareve.es/api-contacto](https://www.mapareve.es/api-contacto)).
+
+### How it works / Cómo funciona
+
+1. Fetches operational status and tariffs from Reve API (paginated, 100/page).
+2. Caches Reve data on disk for incremental refreshes (avoids re-fetching unchanged data).
+3. Builds a spatial index of Reve locations.
+4. Matches each DGT station to the nearest Reve location by geographic proximity.
+5. Merges prices, availability, and operator data into the station object.
+
+### Rate limit / Límite de velocidad
+
+The Reve API allows **5 requests per hour**. The collector:
+- Fetches all needed data in a single pass (locations + status + tariffs = 3 requests).
+- Uses `date_from` for incremental refreshes on subsequent runs.
+- Falls back to cached data if the API is rate-limited.
+- A full initial load of ~14,500 locations takes ~30 hours at 5 req/h.
+
+### Usage / Uso
+
+```js
+const { fetchStations, streamStations, createDgtEvCollector } = require('@gasolinaradar/dgt-ev-collector');
+
+// With fetchStations
+const stations = await fetchStations({
+  enrich: {
+    reveApiKey: process.env.REVE_API_KEY,
+    cacheDir: './cache/reve',         // where to store Reve data on disk
+    thresholdMeters: 100,             // max distance to match (default: 50m)
+  },
+});
+
+// With streaming
+for await (const station of streamStations({
+  enrich: {
+    reveApiKey: process.env.REVE_API_KEY,
+    cacheDir: '/tmp/reve-cache',
+  },
+})) {
+  if (station.prices) {
+    console.log(`${station.name}: €${station.prices[0].price}/kWh`);
+  }
+  if (station.availability) {
+    console.log(`Status: ${station.availability.status}`);
+  }
+}
+
+// With collector contract
+const collector = createDgtEvCollector({
+  enrich: {
+    reveApiKey: process.env.REVE_API_KEY,
+    cacheDir: './cache/reve',
+  },
+});
+const stations = await collector.fetch(context);
+
+// Or enrich an existing array
+const enriched = await collector.enrich(existingStations, {
+  reveApiKey: process.env.REVE_API_KEY,
+  cacheDir: './cache/reve',
+});
+```
+
+### Enrich options / Opciones de enriquecimiento
+
+| Option           | Type     | Default | Description                                                       |
+| ---------------- | -------- | ------- | ----------------------------------------------------------------- |
+| `reveApiKey`     | `string` | —       | **Required.** Reve API key from mapareve.es.                      |
+| `cacheDir`       | `string` | —       | Directory for Reve data cache files. Enables incremental refresh. |
+| `thresholdMeters`| `number` | `50`    | Max distance (meters) to match a DGT station to a Reve location.  |
 
 ---
 

@@ -117,6 +117,8 @@ test('fetchStations returns normalized EV charging stations', async () => {
   ]);
   assert.deepEqual(a.location, { type: 'Point', coordinates: [-3.7038, 40.4168] });
   assert.equal(a.prices, undefined);
+  assert.equal(a.availability, undefined);
+  assert.equal(a.reveLocationId, undefined);
   assert.ok(a.lastUpdated instanceof Date);
 
   assert.equal(b.sourceStationId, 'ID0-2000');

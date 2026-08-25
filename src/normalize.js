@@ -209,6 +209,30 @@ function normalizeConnectors(site) {
   return connectors;
 }
 
+function normalizeTypeOfSite(site) {
+  const raw = extractText(site?.typeOfSite);
+  return raw || undefined;
+}
+
+function normalizeAuthenticationMethods(site) {
+  const raw = site?.authenticationAndIdentificationMethods;
+  if (!raw) return undefined;
+
+  const methods = toArray(raw).map(extractText).filter(Boolean);
+  return methods.length > 0 ? methods : undefined;
+}
+
+function normalizeOperator(site) {
+  const operator = site?.operator;
+  if (!operator) return undefined;
+
+  const name = extractText(operator?.name);
+  if (!name) return undefined;
+
+  const website = extractText(operator?.website) || undefined;
+  return { name, website };
+}
+
 function normalizeSite(site, country) {
   if (!site) {
     return null;
@@ -232,6 +256,9 @@ function normalizeSite(site, country) {
   const schedule = normalizeSchedule(site);
   const services = normalizeServices(site);
   const connectors = normalizeConnectors(site);
+  const typeOfSite = normalizeTypeOfSite(site);
+  const authenticationMethods = normalizeAuthenticationMethods(site);
+  const operator = normalizeOperator(site);
   const lastUpdatedRaw = extractText(site?.lastUpdated);
   const lastUpdated = lastUpdatedRaw ? new Date(lastUpdatedRaw) : new Date();
 
@@ -247,11 +274,16 @@ function normalizeSite(site, country) {
     schedule,
     services,
     connectors,
+    typeOfSite,
+    authenticationMethods,
+    operator,
     location: {
       type: 'Point',
       coordinates: [longitude, latitude],
     },
     prices: undefined,
+    availability: undefined,
+    reveLocationId: undefined,
     lastUpdated,
   };
 }
@@ -266,5 +298,8 @@ module.exports = {
   toNumber,
   normalizeConnector,
   normalizeConnectors,
+  normalizeTypeOfSite,
+  normalizeAuthenticationMethods,
+  normalizeOperator,
   normalizeSite,
 };

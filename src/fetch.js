@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { normalizeSite, extractText } = require('./normalize');
 const { createSiteParser, parseSitesFromXml } = require('./siteParser');
+const { enrichStations } = require('./enrich');
 
 const DEFAULT_DGT_EV_URL =
   'https://infocar.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml';
@@ -193,12 +194,28 @@ async function* streamStations(options = {}, hooks = {}) {
  * Back-compat: colecciona el stream en un array completo. Se mantiene por compatibilidad
  * con quien no haya migrado, pero vuelve a cargar todo el dataset en memoria — no usar con
  * datasets grandes; para eso usar `streamStations` (o `collector.stream()`).
+ *
+ * Si se proporciona `options.enrich` (con `reveApiKey`), las estaciones se enriquecen
+ * con precios y disponibilidad de la API Reve antes de devolverlas.
  */
 async function fetchStations(options = {}, hooks = {}) {
+  const logger = resolveLogger(options.logger);
+  const enrichOpts = options.enrich;
+
   const normalized = [];
   for await (const station of streamStations(options, hooks)) {
     normalized.push(station);
   }
+
+  if (enrichOpts && enrichOpts.reveApiKey) {
+    logger.info('Enriching stations with Reve data');
+    return enrichStations(normalized, {
+      ...enrichOpts,
+      httpClient: resolveHttpClient(options.httpClient),
+      logger,
+    });
+  }
+
   return normalized;
 }
 
@@ -206,6 +223,7 @@ module.exports = {
   fetchStations,
   streamStations,
   parseSitesFromXml,
+  enrichStations,
   DEFAULT_DGT_EV_URL,
   DEFAULT_TIMEOUT,
 };
