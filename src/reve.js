@@ -137,8 +137,11 @@ async function* paginate(httpClient, endpoint, apiKey, options = {}) {
   const headers = buildHeaders(apiKey);
   let page = 1;
   let totalPages = 1;
+  let hasPageHint = false;
 
-  while (page <= totalPages) {
+  for (;;) {
+    if (page > totalPages) break;
+
     if (rateLimiter) {
       await rateLimiter.waitForSlot();
     }
@@ -152,6 +155,7 @@ async function* paginate(httpClient, endpoint, apiKey, options = {}) {
 
     if (result.totalPages) {
       totalPages = result.totalPages;
+      hasPageHint = true;
     }
 
     if (!result.data || (Array.isArray(result.data) && result.data.length === 0)) {
@@ -159,6 +163,10 @@ async function* paginate(httpClient, endpoint, apiKey, options = {}) {
     }
 
     yield result.data;
+
+    if (!hasPageHint && Array.isArray(result.data) && result.data.length < pageSize) {
+      break;
+    }
 
     page += 1;
   }

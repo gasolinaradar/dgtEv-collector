@@ -96,9 +96,18 @@ function normalizeReveLocation(loc) {
     }
   }
 
-  const ownerParts = loc.owner ? loc.owner.split(' - ') : [];
-  const operatorName = ownerParts[0]?.trim() || loc.cpo_name || null;
-  const operatorWebsite = ownerParts.length > 1 ? ownerParts.slice(1).join(' - ').trim() : null;
+  let operatorName = loc.cpo_name || null;
+  let operatorWebsite = null;
+
+  if (loc.owner) {
+    const urlMatch = loc.owner.match(/(https?:\/\/[^\s]+|www\.[^\s]+\.[a-z]{2,})$/i);
+    if (urlMatch) {
+      operatorWebsite = urlMatch[1].trim();
+      operatorName = loc.owner.slice(0, urlMatch.index).replace(/\s*-\s*$/, '').trim() || operatorName;
+    } else {
+      operatorName = loc.owner.trim() || operatorName;
+    }
+  }
 
   return {
     reveLocationId: loc.id,
@@ -144,13 +153,28 @@ function buildTariffMap(tariffsData) {
 }
 
 function buildStatusMap(statusData) {
+  const VALID_STATUSES = new Set([
+    'AVAILABLE', 'CHARGING', 'RESERVED', 'BLOCKED',
+    'INOPERATIVE', 'OUTOFORDER', 'PLANNED', 'REMOVED', 'UNKNOWN',
+  ]);
+
   const map = {};
   for (const entry of statusData) {
     const evseId = entry.evse_id;
     if (!evseId) continue;
+
+    let status;
+    if (entry.status && VALID_STATUSES.has(entry.status)) {
+      status = entry.status;
+    } else if (typeof entry.operational_status === 'boolean') {
+      status = entry.operational_status ? 'AVAILABLE' : 'INOPERATIVE';
+    } else {
+      status = 'UNKNOWN';
+    }
+
     map[evseId] = {
-      status: entry.operational_status ? 'AVAILABLE' : 'INOPERATIVE',
-      lastUpdated: entry.last_operational_status_updated,
+      status,
+      lastUpdated: entry.last_operational_status_updated || entry.last_status_updated || null,
     };
   }
   return map;
@@ -223,6 +247,7 @@ async function enrichStations(stations, options = {}) {
     httpClient,
     logger = console,
     dateFrom: dateFromOverride,
+    onlyDynamicInfo,
   } = options;
 
   if (!reveApiKey) {
@@ -258,8 +283,8 @@ async function enrichStations(stations, options = {}) {
       const cached = cache.loadAllStatus();
       statusData = Object.entries(cached).map(([evseId, entry]) => ({
         evse_id: evseId,
-        operational_status: entry.status === 'AVAILABLE',
-        last_operational_status_updated: entry.lastUpdated,
+        status: entry.status,
+        last_status_updated: entry.lastUpdated,
       }));
     }
   }
@@ -289,9 +314,10 @@ async function enrichStations(stations, options = {}) {
     const statusEntries = {};
     for (const entry of statusData) {
       if (entry.evse_id) {
+        const status = buildStatusMap([entry])[entry.evse_id]?.status || 'UNKNOWN';
         statusEntries[entry.evse_id] = {
-          status: entry.operational_status ? 'AVAILABLE' : 'INOPERATIVE',
-          lastUpdated: entry.last_operational_status_updated,
+          status,
+          lastUpdated: entry.last_operational_status_updated || entry.last_status_updated || null,
         };
       }
     }
@@ -328,7 +354,11 @@ async function enrichStations(stations, options = {}) {
 
   let reveLocations = [];
   try {
-    reveLocations = await reveClient.fetchLocations({ dateFrom: statusDateFrom });
+    const locOpts = { dateFrom: statusDateFrom };
+    if (typeof onlyDynamicInfo === 'boolean') {
+      locOpts.extraParams = { only_dynamic_info: onlyDynamicInfo };
+    }
+    reveLocations = await reveClient.fetchLocations(locOpts);
   } catch (error) {
     if (error.message.includes('rate limit')) {
       reveClient.markLimited();

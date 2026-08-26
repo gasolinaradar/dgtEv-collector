@@ -94,6 +94,38 @@ test('normalizeReveLocation returns null for invalid coordinates', () => {
   assert.equal(normalizeReveLocation(loc), null);
 });
 
+test('normalizeReveLocation parses owner with URL in the middle', () => {
+  const loc = {
+    id: 'reve-456',
+    coordinates: { latitude: '40.4168', longitude: '-3.7038' },
+    party_id: 'ES*END',
+    cpo_name: 'Endesa',
+    owner: 'Energía Plus - Solar - https://energiaplus.es',
+    evses: [],
+  };
+
+  const result = normalizeReveLocation(loc);
+  assert.ok(result);
+  assert.equal(result.operator.name, 'Energía Plus - Solar');
+  assert.equal(result.operator.website, 'https://energiaplus.es');
+});
+
+test('normalizeReveLocation parses owner with no URL', () => {
+  const loc = {
+    id: 'reve-789',
+    coordinates: { latitude: '40.4168', longitude: '-3.7038' },
+    party_id: 'ES*IBE',
+    cpo_name: 'Iberdrola',
+    owner: 'Iberdrola',
+    evses: [],
+  };
+
+  const result = normalizeReveLocation(loc);
+  assert.ok(result);
+  assert.equal(result.operator.name, 'Iberdrola');
+  assert.equal(result.operator.website, null);
+});
+
 test('buildTariffMap creates connector-to-tariffs mapping', () => {
   const data = [
     {
@@ -123,7 +155,7 @@ test('buildTariffMap creates connector-to-tariffs mapping', () => {
   assert.equal(map['conn-1'][1].price, 0.05);
 });
 
-test('buildStatusMap creates evse-to-status mapping', () => {
+test('buildStatusMap creates evse-to-status mapping from boolean format', () => {
   const data = [
     { evse_id: 'evse-1', operational_status: true, last_operational_status_updated: '2026-01-01T00:00:00Z' },
     { evse_id: 'evse-2', operational_status: false, last_operational_status_updated: '2026-01-02T00:00:00Z' },
@@ -132,6 +164,19 @@ test('buildStatusMap creates evse-to-status mapping', () => {
   const map = buildStatusMap(data);
   assert.equal(map['evse-1'].status, 'AVAILABLE');
   assert.equal(map['evse-2'].status, 'INOPERATIVE');
+});
+
+test('buildStatusMap uses status field from EvseStatus when available', () => {
+  const data = [
+    { evse_id: 'evse-1', status: 'CHARGING', last_status_updated: '2026-01-01T00:00:00Z' },
+    { evse_id: 'evse-2', status: 'BLOCKED', last_status_updated: '2026-01-02T00:00:00Z' },
+    { evse_id: 'evse-3', operational_status: true, last_operational_status_updated: '2026-01-03T00:00:00Z' },
+  ];
+
+  const map = buildStatusMap(data);
+  assert.equal(map['evse-1'].status, 'CHARGING');
+  assert.equal(map['evse-2'].status, 'BLOCKED');
+  assert.equal(map['evse-3'].status, 'AVAILABLE');
 });
 
 test('mergePrices returns tariffs from Reve connectors', () => {
