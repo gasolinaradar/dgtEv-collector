@@ -94,29 +94,34 @@ function unwrapPaginated(body) {
   return { data: Array.isArray(body?.data) ? body.data : [], pagination: body?.pagination || null };
 }
 
-async function* streamLocations(httpClient, opts = {}) {
+// Yields `{ data, page, totalPages }` per page fetched (not just `data`) so callers that
+// need to resume a sweep across calls (see fetchLocationsSweep below) know exactly where
+// pagination stopped and whether it was because of maxPages or because the dataset ended.
+async function* streamLocationPages(httpClient, opts = {}) {
   const {
     perPage = DEFAULT_PAGE_SIZE,
     filters = {},
     requestDelayMs = DEFAULT_REQUEST_DELAY_MS,
     maxPages = DEFAULT_MAX_PAGES,
+    startPage = 1,
     logger = console,
     ...rest
   } = opts;
 
-  let page = 1;
-  let totalPages = 1;
+  let page = startPage;
+  let totalPages = null;
+  let pagesFetched = 0;
 
   for (;;) {
-    if (page > totalPages) break;
-    if (page > maxPages) {
+    if (totalPages !== null && page > totalPages) break;
+    if (pagesFetched >= maxPages) {
       logger.warn(
         `Reve public API: stopped at maxPages (${maxPages}) — dataset is partial. ` +
           `Raise options.maxPages if you deliberately want more (each extra page is one request).`,
       );
       break;
     }
-    if (page > 1) await sleep(requestDelayMs);
+    if (pagesFetched > 0) await sleep(requestDelayMs);
 
     const body = await request(
       httpClient,
@@ -126,6 +131,7 @@ async function* streamLocations(httpClient, opts = {}) {
       { logger, ...rest },
     );
     const { data, pagination } = unwrapPaginated(body);
+    pagesFetched += 1;
 
     if (pagination?.total_pages) {
       totalPages = pagination.total_pages;
@@ -134,7 +140,7 @@ async function* streamLocations(httpClient, opts = {}) {
     }
 
     if (data.length === 0) break;
-    yield data;
+    yield { data, page, totalPages };
     page += 1;
   }
 }
@@ -174,16 +180,54 @@ function createRevePublicClient(options = {}) {
       return unwrapPaginated(body);
     },
 
+    // Yields raw location arrays, one per page — same shape as before. Doesn't expose
+    // page/totalPages; use fetchLocationsSweep if you need to resume across calls.
     async *streamLocations(opts = {}) {
-      yield* streamLocations(httpClient, buildOpts(opts));
+      for await (const { data } of streamLocationPages(httpClient, buildOpts(opts))) {
+        yield data;
+      }
     },
 
     async fetchAllLocations(opts = {}) {
       const results = [];
-      for await (const page of streamLocations(httpClient, buildOpts(opts))) {
-        results.push(...page);
+      for await (const { data } of streamLocationPages(httpClient, buildOpts(opts))) {
+        results.push(...data);
       }
       return results;
+    },
+
+    // Like fetchAllLocations, but resumable: pass `startPage` (default 1) and read
+    // `nextPage`/`totalPages` off the result to continue from exactly where this call
+    // stopped on the next invocation — e.g. across scheduled runs, without ever exceeding
+    // `maxPages` requests in a single call. `nextPage` wraps back to 1 once a full sweep
+    // completes (dataset changes over time, so it's worth re-walking periodically), and
+    // `completedSweep` tells you whether that happened on this call.
+    async fetchLocationsSweep(opts = {}) {
+      const built = buildOpts(opts);
+      const startPage = built.startPage ?? 1;
+      const locations = [];
+      let lastPage = null;
+      let totalPages = null;
+
+      for await (const pageResult of streamLocationPages(httpClient, built)) {
+        locations.push(...pageResult.data);
+        lastPage = pageResult.page;
+        totalPages = pageResult.totalPages;
+      }
+
+      if (lastPage === null) {
+        // Nothing fetched at all (maxPages: 0, or the very first page came back empty) —
+        // retry the same startPage next time instead of silently skipping it.
+        return { locations, totalPages, nextPage: startPage, completedSweep: false };
+      }
+
+      const reachedEnd = totalPages !== null && lastPage >= totalPages;
+      return {
+        locations,
+        totalPages,
+        nextPage: reachedEnd ? 1 : lastPage + 1,
+        completedSweep: reachedEnd,
+      };
     },
 
     async fetchMarkers(

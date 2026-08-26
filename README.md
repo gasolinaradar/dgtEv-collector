@@ -395,6 +395,23 @@ to cover all of Spain means committing to ~1,450 requests against an endpoint wi
 documented rate limit or SLA, on every run. If this runs on a cron, size `maxPages` (or
 scope `filters` to a region/CPO) deliberately; don't default to "fetch everything."
 
+**Covering more than `maxPages` over time: pass `cacheDir`.** Without it, every call starts
+back at page 1 and only that call's fetch is used — coverage never grows. With `cacheDir`
+set, each call picks up at the page the previous call stopped on (persisted to
+`<cacheDir>/reve_public_sweep.json`) and merges newly-fetched locations into what's already
+accumulated there, so an hourly cron with `maxPages: 50` covers pages 1-50 on the first run,
+51-100 on the next, and so on — full national coverage in ~29 runs (~29 hours at 50
+pages/run) instead of one 1,450-request burst. Once a sweep completes, the cursor wraps back
+to page 1 to pick up changes (status, tariffs, new sites) in Reve's data.
+
+```js
+const enriched = await experimental.enrichStationsExperimental(stations, {
+  acknowledgeUnsupported: true,
+  cacheDir: './cache/reve-public', // <- makes maxPages a per-run budget, not a hard ceiling
+  maxPages: 50,
+});
+```
+
 **ES:** `experimental.createRevePublicClient` y `experimental.enrichStationsExperimental`
 hablan con `https://www.mapareve.es/api/public/v1` — la API interna y sin autenticación que
 usa el propio mapa de mapareve.es en el navegador, obtenida por ingeniería inversa de su
@@ -410,6 +427,24 @@ llamadas". `maxPages` viene con **50** por defecto (500 ubicaciones) precisament
 subirlo para cubrir toda España implica asumir ~1.450 peticiones contra un endpoint sin
 límite ni SLA documentados, en cada ejecución. Si esto corre en un cron, dimensiona
 `maxPages` (o acota `filters` a una región/CPO) a propósito; no lo dejes en "traer todo".
+
+**Para cubrir más que `maxPages` a lo largo del tiempo: pasa `cacheDir`.** Sin él, cada
+llamada vuelve a empezar en la página 1 y solo se usa lo que trae esa llamada — la cobertura
+nunca crece. Con `cacheDir`, cada llamada continúa desde la página donde se quedó la anterior
+(persistido en `<cacheDir>/reve_public_sweep.json`) y fusiona las ubicaciones nuevas con las
+ya acumuladas, así que un cron horario con `maxPages: 50` cubre las páginas 1-50 en la
+primera ejecución, 51-100 en la siguiente, etc. — cobertura nacional completa en ~29
+ejecuciones (~29 horas a 50 páginas/ejecución) en vez de una ráfaga de 1.450 peticiones de
+golpe. Al completar una vuelta entera, el cursor vuelve a la página 1 para recoger cambios
+(estado, tarifas, nuevos emplazamientos) en los datos de Reve.
+
+```js
+const enriched = await experimental.enrichStationsExperimental(stations, {
+  acknowledgeUnsupported: true,
+  cacheDir: './cache/reve-public', // hace de maxPages un presupuesto por ejecución, no un tope duro
+  maxPages: 50,
+});
+```
 
 Nada de eso la hace soportada: no está publicada por Red Eléctrica, puede cambiar o
 desaparecer sin aviso, y su uso automatizado fuera del navegador puede quedar fuera de los

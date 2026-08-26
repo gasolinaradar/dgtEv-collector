@@ -211,6 +211,55 @@ test('fetchAllLocations defaults to DEFAULT_MAX_PAGES without an explicit maxPag
   assert.equal(locations.length, DEFAULT_MAX_PAGES);
 });
 
+test('fetchLocationsSweep resumes from startPage and reports nextPage when capped', async () => {
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      return {
+        status: 200,
+        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: 1000, total_count: 10000 } },
+      };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  const result = await client.fetchLocationsSweep({ startPage: 51, maxPages: 3, requestDelayMs: 0 });
+  assert.equal(result.locations.length, 3);
+  assert.deepEqual(result.locations.map((l) => l.id), ['loc-51', 'loc-52', 'loc-53']);
+  assert.equal(result.nextPage, 54, 'should resume right after the last page fetched');
+  assert.equal(result.totalPages, 1000);
+  assert.equal(result.completedSweep, false);
+});
+
+test('fetchLocationsSweep wraps nextPage back to 1 when it reaches the last page', async () => {
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      const data_ = page <= 3 ? [{ id: `loc-${page}` }] : [];
+      return {
+        status: 200,
+        data: { data: data_, pagination: { page, per_page: 10, total_pages: 3, total_count: 3 } },
+      };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  const result = await client.fetchLocationsSweep({ startPage: 1, maxPages: 50, requestDelayMs: 0 });
+  assert.equal(result.locations.length, 3);
+  assert.equal(result.nextPage, 1, 'a completed sweep should restart from page 1 next time');
+  assert.equal(result.completedSweep, true);
+});
+
 test('fetchMarkers sends bbox and zoom as the POST body', async () => {
   let capturedData;
   const fakeHttpClient = {

@@ -1,5 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {
   enrichStationsExperimental,
   normalizeRevePublicLocation,
@@ -169,4 +172,83 @@ test('enrichStationsExperimental leaves stations untouched when nothing matches 
 
   assert.equal(result[0].reveLocationId, undefined);
   assert.equal(result[0].prices, undefined);
+});
+
+test('enrichStationsExperimental with cacheDir resumes pagination and accumulates locations across calls', async () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reve-public-sweep-'));
+  try {
+    // 3 total pages of 1 location each, distinct ids/coords so each call's match is unique.
+    const pages = {
+      1: samplePublicLocation({ id: 'reve-pub-1', coordinates: { latitude: '40.0', longitude: '-3.0' } }),
+      2: samplePublicLocation({ id: 'reve-pub-2', coordinates: { latitude: '41.0', longitude: '-4.0' } }),
+      3: samplePublicLocation({ id: 'reve-pub-3', coordinates: { latitude: '42.0', longitude: '-5.0' } }),
+    };
+    const fakeHttpClient = {
+      post: async (url, data, config) => {
+        const page = config.params.page;
+        const loc = pages[page];
+        return {
+          status: 200,
+          data: {
+            data: loc ? [loc] : [],
+            pagination: { page, per_page: 1, total_pages: 3, total_count: 3 },
+          },
+        };
+      },
+    };
+
+    const baseOpts = {
+      acknowledgeUnsupported: true,
+      httpClient: fakeHttpClient,
+      logger: silentLogger,
+      cacheDir,
+      maxPages: 1,
+      thresholdMeters: 5000,
+    };
+
+    // Call 1: fetches page 1 only (maxPages: 1), stores reve-pub-1 in the cache.
+    await enrichStationsExperimental([], baseOpts);
+    let state = JSON.parse(fs.readFileSync(path.join(cacheDir, 'reve_public_sweep.json'), 'utf-8'));
+    assert.equal(state.nextPage, 2);
+    assert.deepEqual(Object.keys(state.locations), ['reve-pub-1']);
+
+    // Call 2: resumes at page 2, accumulates reve-pub-2 alongside reve-pub-1.
+    await enrichStationsExperimental([], baseOpts);
+    state = JSON.parse(fs.readFileSync(path.join(cacheDir, 'reve_public_sweep.json'), 'utf-8'));
+    assert.equal(state.nextPage, 3);
+    assert.deepEqual(Object.keys(state.locations).sort(), ['reve-pub-1', 'reve-pub-2']);
+
+    // Call 3: resumes at page 3 (the last one), wraps nextPage back to 1.
+    const stations = [
+      { sourceStationId: 'dgt-1', location: { type: 'Point', coordinates: [-5.0, 42.0] }, prices: undefined, availability: undefined },
+    ];
+    const enriched = await enrichStationsExperimental(stations, baseOpts);
+    state = JSON.parse(fs.readFileSync(path.join(cacheDir, 'reve_public_sweep.json'), 'utf-8'));
+    assert.equal(state.nextPage, 1, 'a completed sweep should wrap back to page 1');
+    assert.deepEqual(Object.keys(state.locations).sort(), ['reve-pub-1', 'reve-pub-2', 'reve-pub-3']);
+    // By call 3 all three accumulated locations are in the index, so the station near
+    // reve-pub-3 matches even though this call only fetched page 3.
+    assert.equal(enriched[0].reveLocationId, 'reve-pub-3');
+  } finally {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  }
+});
+
+test('enrichStationsExperimental without cacheDir always restarts at page 1 (no accumulation)', async () => {
+  let capturedPages = [];
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      capturedPages.push(config.params.page);
+      return {
+        status: 200,
+        data: { data: [samplePublicLocation()], pagination: { page: config.params.page, per_page: 1, total_pages: 1, total_count: 1 } },
+      };
+    },
+  };
+
+  const opts = { acknowledgeUnsupported: true, httpClient: fakeHttpClient, logger: silentLogger, maxPages: 1 };
+  await enrichStationsExperimental([], opts);
+  await enrichStationsExperimental([], opts);
+
+  assert.deepEqual(capturedPages, [1, 1], 'every call starts at page 1 without cacheDir');
 });

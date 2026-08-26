@@ -10,7 +10,10 @@
 // (POST /locations) instead of three separate feeds (locations + operational_status +
 // tariffs) — at the cost of relying on an endpoint nobody guarantees will keep working.
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { createRevePublicClient } = require('./reve-public');
+const { readJson, writeJson } = require('./cache');
 const { SpatialIndex, STATUS_PRIORITY, DEFAULT_THRESHOLD_METERS } = require('./enrich');
 
 function normalizeRevePublicLocation(loc) {
@@ -99,6 +102,25 @@ function mergePublicAvailability(reveLoc) {
   return { status: 'UNKNOWN', evseCount: statuses.length, lastUpdated: new Date().toISOString() };
 }
 
+function sweepFilePath(cacheDir) {
+  return path.join(cacheDir, 'reve_public_sweep.json');
+}
+
+function loadSweepState(cacheDir) {
+  if (!cacheDir) return { nextPage: 1, locations: {} };
+  const state = readJson(sweepFilePath(cacheDir));
+  return {
+    nextPage: typeof state?.nextPage === 'number' && state.nextPage > 0 ? state.nextPage : 1,
+    locations: state?.locations && typeof state.locations === 'object' ? state.locations : {},
+  };
+}
+
+function saveSweepState(cacheDir, state) {
+  if (!cacheDir) return;
+  if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+  writeJson(sweepFilePath(cacheDir), { ...state, updatedAt: new Date().toISOString() });
+}
+
 async function enrichStationsExperimental(stations, options = {}) {
   const {
     thresholdMeters = DEFAULT_THRESHOLD_METERS,
@@ -113,13 +135,24 @@ async function enrichStationsExperimental(stations, options = {}) {
     // pages / 500 locations) applies unless the caller deliberately raises it — do NOT
     // default this to "cover all of Spain" on a schedule without reading that comment.
     maxPages,
+    // Directory to persist pagination progress + accumulated locations across calls. With
+    // this set, each call fetches at most `maxPages` pages starting where the previous call
+    // left off (instead of always restarting at page 1), so coverage grows call over call —
+    // e.g. one hourly cron run covers pages 1-50, the next 51-100, and so on, wrapping back
+    // to page 1 once a full sweep completes (Reve's data changes over time, so it's worth
+    // re-walking periodically). Without cacheDir, behavior is unchanged from before: always
+    // starts at page 1, only this call's fetch is used (no accumulation between calls).
+    cacheDir,
   } = options;
 
   const reveClient = createRevePublicClient({ httpClient, logger, acknowledgeUnsupported });
 
-  let reveLocations = [];
+  const prevState = loadSweepState(cacheDir);
+  const accumulated = prevState.locations;
+
+  let sweepResult;
   try {
-    reveLocations = await reveClient.fetchAllLocations({ filters, perPage, maxPages });
+    sweepResult = await reveClient.fetchLocationsSweep({ filters, perPage, maxPages, startPage: prevState.nextPage });
   } catch (error) {
     logger.warn('Failed to fetch Reve public locations for matching', {
       error: error.message,
@@ -129,11 +162,23 @@ async function enrichStationsExperimental(stations, options = {}) {
     return stations;
   }
 
-  const normalizedReve = [];
-  for (const loc of reveLocations) {
+  for (const loc of sweepResult.locations) {
     const n = normalizeRevePublicLocation(loc);
-    if (n) normalizedReve.push(n);
+    if (n) accumulated[n.reveLocationId] = n;
   }
+
+  saveSweepState(cacheDir, { nextPage: sweepResult.nextPage, locations: accumulated });
+
+  logger.info('Reve public locations sweep progress', {
+    fetchedThisRun: sweepResult.locations.length,
+    accumulatedTotal: Object.keys(accumulated).length,
+    nextPage: sweepResult.nextPage,
+    totalPages: sweepResult.totalPages,
+    completedSweep: sweepResult.completedSweep,
+    persisted: Boolean(cacheDir),
+  });
+
+  const normalizedReve = Object.values(accumulated);
 
   logger.info('Building spatial index for Reve public locations', { count: normalizedReve.length });
   const index = new SpatialIndex();
