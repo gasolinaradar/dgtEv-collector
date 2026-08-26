@@ -62,11 +62,8 @@ test('normalizeRevePublicLocation parses the real /locations/{id} shape', () => 
   assert.equal(result.lon, -3.7038);
   assert.equal(result.operator.name, 'ACME Recarga S.L.');
   assert.equal(result.operator.website, 'acme-recarga.example');
-  assert.equal(result.allConnectors.length, 1);
-  assert.equal(result.allConnectors[0].standard, 'IEC_62196_T2_COMBO');
-  assert.equal(result.allConnectors[0].maxPowerW, 65000);
-  assert.equal(result.allConnectors[0].prices[0].price, 0.48);
-  assert.deepEqual(result.evseStatuses, ['AVAILABLE']);
+  assert.ok(result.raw);
+  assert.equal(result.raw.id, 'reve-pub-1');
 });
 
 test('normalizeRevePublicLocation returns null for invalid coordinates', () => {
@@ -373,4 +370,49 @@ test('enrichStationsPublic falls back to proximity when there is no name match',
   });
 
   assert.equal(result[0].reveLocationId, 'reve-prox-only');
+});
+
+test('enrichStationsPublic discards Reve locations that are neither a name nor a proximity candidate (memory: never normalized/retained)', async () => {
+  // Only one DGT station, near (0, 0) with no name. Reve sends back 200 far-away,
+  // irrelevant locations plus 1 real candidate near (0, 0).
+  const farLocations = Array.from({ length: 200 }, (_, i) =>
+    samplePublicLocation({
+      id: `reve-far-${i}`,
+      name: `Irrelevant ${i}`,
+      coordinates: { latitude: String(10 + i), longitude: String(10 + i) },
+    }),
+  );
+  const nearLocation = samplePublicLocation({
+    id: 'reve-real-match',
+    name: 'Not Matched By Name',
+    coordinates: { latitude: '0.0001', longitude: '0.0001' },
+  });
+
+  const fakeHttpClient = {
+    post: async () => ({
+      status: 200,
+      data: { data: [...farLocations, nearLocation], pagination: { page: 1, per_page: 201, total_pages: 1, total_count: 201 } },
+    }),
+  };
+
+  const infoLogs = [];
+  const logger = { ...silentLogger, info: (msg, meta) => infoLogs.push({ msg, meta }) };
+
+  const stations = [
+    { sourceStationId: 'dgt-1', location: { type: 'Point', coordinates: [0, 0] }, prices: undefined, availability: undefined },
+  ];
+
+  const result = await enrichStationsPublic(stations, {
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger,
+    thresholdMeters: 100,
+  });
+
+  assert.equal(result[0].reveLocationId, 'reve-real-match');
+
+  const sweepLog = infoLogs.find((l) => l.msg === 'Reve public locations sweep complete');
+  assert.ok(sweepLog, 'expected the sweep-complete log line');
+  assert.equal(sweepLog.meta.fetched, 201);
+  assert.equal(sweepLog.meta.kept, 1, 'only the one geographically/nominally relevant location should be kept');
 });

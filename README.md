@@ -390,6 +390,18 @@ Only when there's no name match at all does it fall back to nearest-within-`thre
 The enrichment-complete log reports `matchedByName` vs `matchedByProximity` so you can see
 which one fired.
 
+**Memory**: Reve locations are streamed page by page and filtered as they arrive — a
+location is only fully parsed and kept in memory if it's within `thresholdMeters` of at
+least one input station, or its `name` matches one exactly; everything else is discarded
+immediately, never fully parsed. The `Reve public locations sweep complete` log reports
+`fetched` (total seen) vs `kept` (retained as a candidate) so you can see the filter ratio
+for your own data — how much it helps depends on how geographically/nominally dense your
+input stations are relative to Reve's coverage (on one real sample: 500 fetched, 364 kept).
+This bounds peak memory to roughly the size of the candidate set instead of the full
+~14,500-location dataset, but does **not** guarantee a fixed ceiling — on a very
+memory-constrained process, also consider a smaller `maxPages` per call, running less
+frequently, or increasing the container's memory limit.
+
 **ES:** Habla con `https://www.mapareve.es/api/public/v1` — la API interna y sin
 autenticación que usa el propio mapa de mapareve.es en el navegador, obtenida por ingeniería
 inversa de su bundle JS. No requiere API key, no se observó ningún límite de peticiones
@@ -427,6 +439,19 @@ sin importar la distancia; si varias ubicaciones Reve comparten ese nombre exact
 más cercana de esas. Solo si no hay ningún nombre coincidente cae al comportamiento anterior
 (más cercana dentro de `thresholdMeters`). El log de fin de enriquecimiento reporta
 `matchedByName` vs `matchedByProximity` para que veas cuál se disparó.
+
+**Memoria**: las ubicaciones Reve se reciben página a página y se filtran al vuelo — una
+ubicación solo se parsea del todo y se guarda en memoria si está dentro de
+`thresholdMeters` de alguna estación de entrada, o su `name` coincide exactamente con
+alguna; todo lo demás se descarta de inmediato, sin llegar a parsearse. El log `Reve public
+locations sweep complete` reporta `fetched` (total visto) vs `kept` (retenido como
+candidato) para que veas el ratio de filtrado con tus propios datos — cuánto ayuda depende
+de la densidad geográfica/de nombres de tus estaciones de entrada respecto a la cobertura de
+Reve (en una muestra real: 500 vistas, 364 retenidas). Esto acota la memoria máxima al
+tamaño aproximado del conjunto de candidatos en vez del dataset completo (~14.500
+ubicaciones), pero **no** garantiza un techo fijo — en un proceso muy limitado de memoria,
+considera también un `maxPages` menor por llamada, ejecutarlo con menos frecuencia, o subir
+el límite de memoria del contenedor.
 
 ### Usage / Uso
 

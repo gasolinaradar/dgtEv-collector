@@ -227,10 +227,11 @@ public locations page N` (info, por página, con `count, ms, totalPages, totalCo
 Reve public locations page N after retries — skipping it` (warn), `Reve public API: N
 consecutive page failures — stopping sweep early` (warn), `Reve public API: stopped at
 maxPages (N) — dataset is partial` (warn, solo si `maxPages` explícito lo cortó),
-`Reve public locations sweep complete` (info, con `fetched, normalized`), `Building spatial
-index for Reve public locations` (info, con `count`), `Reve public-API enrichment complete`
-(info, con `totalStations, matched, matchedByName, matchedByProximity, withPrices,
-withAvailability`).
+`Reve public locations sweep complete` (info, con `fetched, kept` — `fetched` es el total
+visto, `kept` el subconjunto que pasó el filtro geográfico/de nombre y se retuvo en
+memoria; ver sección 7 sobre memoria), `Building spatial index for Reve public locations`
+(info, con `count`), `Reve public-API enrichment complete` (info, con `totalStations,
+matched, matchedByName, matchedByProximity, withPrices, withAvailability`).
 
 Para auditar si el enriquecimiento realmente está corriendo y con qué resultado, el log a
 vigilar es el último de cada fuente (`Enrichment complete` / `Reve public-API enrichment
@@ -253,6 +254,16 @@ complete`) — trae el ratio `matched`/`totalStations` y cuántos quedaron con p
   nombre genérico (p. ej. una marca sin más contexto).
 - **`prices`/`availability` son agregados de todos los conectores de la ubicación Reve
   matcheada**, no filtrados por el tipo de conector concreto de la estación DGT.
+- **Memoria en `public`**: las ubicaciones se reciben en streaming, página a página, y se
+  descartan de inmediato salvo que sean candidatas (dentro de `thresholdMeters` de alguna
+  estación de entrada, o nombre exacto coincidente) — ya no se acumula nunca el dataset
+  completo de Reve en memoria (~14.500 ubicaciones con sus tarifas/EVSEs anidados, que en un
+  proceso con memoria justa puede agotar el heap de Node antes de terminar el barrido — esto
+  ya ocurrió una vez en PRE). El ratio real de filtrado (log `fetched` vs `kept`) depende de
+  cuánto se solapan geográfica/nominalmente tus estaciones de entrada con la cobertura de
+  Reve — no hay una garantía de techo fijo de memoria, solo una reducción respecto a
+  retenerlo todo. Si el proceso sigue muy limitado de memoria, combinar con un `maxPages`
+  menor por llamada o más memoria de contenedor.
 
 ---
 
