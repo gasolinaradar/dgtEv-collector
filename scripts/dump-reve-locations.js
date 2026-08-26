@@ -7,7 +7,7 @@ const BASE_URL = 'https://www.mapareve.es/api/public/v1';
 const SPAIN_BBOX = { latitude_ne: 44, longitude_ne: 4.5, latitude_sw: 27, longitude_sw: -18.5 };
 
 function parseArgs(argv) {
-  const args = { startPage: 1, maxPages: 50, perPage: 25, delayMs: 200, out: './reve-dump.ndjson' };
+  const args = { startPage: 1, maxPages: Infinity, perPage: 25, delayMs: 200, out: './reve-dump.ndjson' };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const value = argv[i + 1];
