@@ -1,5 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {
   haversineMeters,
   SpatialIndex,
@@ -10,8 +13,13 @@ const {
   mergeAvailability,
   enrichStations,
 } = require('../src/enrich');
+const { createReveCache } = require('../src/cache');
 
 const silentLogger = { info: () => {}, warn: () => {}, debug: () => {} };
+
+function tempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'reve-enrich-test-'));
+}
 
 test('haversineMeters calculates distance between two points', () => {
   const dist = haversineMeters(40.4168, -3.7038, 40.417, -3.704);
@@ -334,4 +342,175 @@ test('enrichStations matches DGT stations to Reve by proximity', async () => {
   assert.ok(result[0].availability);
   assert.equal(result[0].availability.status, 'AVAILABLE');
   assert.equal(result[0].operator.name, 'Wenea');
+});
+
+test('enrichStations fetches locations before status/tariffs (locations get priority for the shared rate limit)', async () => {
+  const callOrder = [];
+  const fakeHttpClient = {
+    get: async (url) => {
+      if (url.includes('/locations')) callOrder.push('locations');
+      else if (url.includes('/evses/operational_status')) callOrder.push('status');
+      else if (url.includes('/connectors/tariffs')) callOrder.push('tariffs');
+      return { status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } };
+    },
+  };
+
+  await enrichStations([], {
+    reveApiKey: 'test-key',
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  assert.deepEqual(
+    callOrder,
+    ['locations', 'status', 'tariffs'],
+    'sin locations no puede haber match pase lo que pase con status/tariffs, así que van primero',
+  );
+});
+
+test('enrichStations accumulates locations in cache across calls instead of losing coverage each cycle', async () => {
+  const dir = tempDir();
+
+  const stationNearLoc1 = {
+    sourceStationId: 'dgt-1',
+    location: { type: 'Point', coordinates: [-3.7038, 40.4168] },
+    connectors: [],
+  };
+
+  function buildHttpClient(locationsPage) {
+    return {
+      get: async (url) => {
+        if (url.includes('/locations')) {
+          return {
+            status: 200,
+            data: locationsPage,
+            headers: { 'total-count': String(locationsPage.length), 'total-pages': '1' },
+          };
+        }
+        return { status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } };
+      },
+    };
+  }
+
+  const loc1 = { id: 'reve-1', coordinates: { latitude: '40.4168', longitude: '-3.7038' }, evses: [] };
+  const loc2 = { id: 'reve-2', coordinates: { latitude: '41.0', longitude: '-4.0' }, evses: [] };
+
+  // Ciclo 1: el fetch de este ciclo solo trae loc1 (simula cupo limitado a una página).
+  await enrichStations([stationNearLoc1], {
+    reveApiKey: 'test-key',
+    cacheDir: dir,
+    httpClient: buildHttpClient([loc1]),
+    logger: silentLogger,
+    thresholdMeters: 100,
+  });
+
+  // Ciclo 2: el fetch de este ciclo solo trae loc2 (loc1 no matcheó ya el date_from incremental,
+  // p. ej. porque no cambió). loc1 debe seguir matcheando desde el cache acumulado, no perderse.
+  const result2 = await enrichStations([stationNearLoc1], {
+    reveApiKey: 'test-key',
+    cacheDir: dir,
+    httpClient: buildHttpClient([loc2]),
+    logger: silentLogger,
+    thresholdMeters: 100,
+  });
+
+  assert.equal(
+    result2[0].reveLocationId,
+    'reve-1',
+    'debe seguir matcheando loc1 aunque el ciclo 2 no la haya vuelto a traer',
+  );
+
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('a failed locations fetch does not poison lastLocationsFetch (unlike the known status/tariffs bug)', async () => {
+  const dir = tempDir();
+
+  const failingHttpClient = {
+    get: async (url) => {
+      if (url.includes('/locations')) {
+        throw new Error('network down');
+      }
+      return { status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } };
+    },
+  };
+
+  await enrichStations([], {
+    reveApiKey: 'test-key',
+    cacheDir: dir,
+    httpClient: failingHttpClient,
+    logger: silentLogger,
+  });
+
+  const cache = createReveCache(dir);
+  assert.equal(cache.getLastLocationsFetchDate(), null, 'un fallo no debe dejar timestamp');
+
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('availability lookup uses accumulated status cache across cycles, not just the current incremental fetch', async () => {
+  const dir = tempDir();
+
+  const station = {
+    sourceStationId: 'dgt-1',
+    location: { type: 'Point', coordinates: [-3.7038, 40.4168] },
+    connectors: [],
+  };
+
+  const loc = {
+    id: 'reve-1',
+    coordinates: { latitude: '40.4168', longitude: '-3.7038' },
+    evses: [{ id: 'evse-1', connectors: [] }],
+  };
+
+  function buildHttpClient({ locations, status }) {
+    return {
+      get: async (url) => {
+        if (url.includes('/locations')) {
+          return {
+            status: 200,
+            data: locations,
+            headers: { 'total-count': String(locations.length), 'total-pages': '1' },
+          };
+        }
+        if (url.includes('/evses/operational_status')) {
+          return {
+            status: 200,
+            data: status,
+            headers: { 'total-count': String(status.length), 'total-pages': '1' },
+          };
+        }
+        return { status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } };
+      },
+    };
+  }
+
+  // Ciclo 1: status trae evse-1 = AVAILABLE.
+  await enrichStations([station], {
+    reveApiKey: 'test-key',
+    cacheDir: dir,
+    httpClient: buildHttpClient({
+      locations: [loc],
+      status: [
+        { evse_id: 'evse-1', operational_status: true, last_operational_status_updated: '2026-01-01T00:00:00Z' },
+      ],
+    }),
+    logger: silentLogger,
+    thresholdMeters: 100,
+  });
+
+  // Ciclo 2: el refresh incremental de status no devuelve nada nuevo (evse-1 no cambió) — la
+  // disponibilidad debe seguir saliendo del cache acumulado, no desaparecer.
+  const result2 = await enrichStations([station], {
+    reveApiKey: 'test-key',
+    cacheDir: dir,
+    httpClient: buildHttpClient({ locations: [loc], status: [] }),
+    logger: silentLogger,
+    thresholdMeters: 100,
+  });
+
+  assert.ok(result2[0].availability, 'la disponibilidad de evse-1 debe seguir viniendo del cache acumulado');
+  assert.equal(result2[0].availability.status, 'AVAILABLE');
+
+  fs.rmSync(dir, { recursive: true });
 });

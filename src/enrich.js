@@ -262,6 +262,57 @@ async function enrichStations(stations, options = {}) {
   });
   const cache = cacheDir ? createReveCache(cacheDir) : null;
 
+  // `locations` se pide PRIMERO, antes que status/tariffs: sin ubicaciones no puede haber match
+  // por proximidad pase lo que pase con el resto, así que se prioriza en el reparto del cupo
+  // compartido de 5 req/h de Reve — status/tariffs se quedan con lo que sobre, si sobra algo.
+  //
+  // A diferencia de status/tariffs (que sobrescriben con el último valor visto por EVSE/
+  // conector), las ubicaciones se ACUMULAN en cache entre ciclos: bulkUpdateLocations hace
+  // merge, no replace, y el índice de matching se construye siempre desde el cache completo
+  // (loadAllLocations), no solo desde lo fetcheado en este ciclo concreto. Sin esto, cada ciclo
+  // solo vería lo que quepa en el cupo disponible esa hora y nunca llegaría a cubrir el dataset
+  // completo (~14.500 ubicaciones a 100/página, muy por encima de 5 páginas/hora).
+  const lastLocationsFetch = cache?.getLastLocationsFetchDate() || null;
+  const locationsDateFrom = dateFromOverride || lastLocationsFetch || undefined;
+
+  logger.info('Fetching Reve locations', { dateFrom: locationsDateFrom || 'full' });
+  let fetchedLocations = [];
+  try {
+    const locOpts = { dateFrom: locationsDateFrom };
+    if (typeof onlyDynamicInfo === 'boolean') {
+      locOpts.extraParams = { only_dynamic_info: onlyDynamicInfo };
+    }
+    fetchedLocations = await reveClient.fetchLocations(locOpts);
+
+    if (cache) {
+      const locationEntries = {};
+      for (const loc of fetchedLocations) {
+        const normalized = normalizeReveLocation(loc);
+        if (normalized) {
+          locationEntries[normalized.reveLocationId] = normalized;
+        }
+      }
+      // Solo se bumpea lastLocationsFetch aquí dentro del try, en el camino de éxito real — un
+      // fallo (ver catch) no envenena el dateFrom del siguiente intento, a diferencia del bug ya
+      // conocido en status/tariffs (bulkUpdateStatus/bulkUpdateTariffs sí se llaman también en
+      // el camino de fallo, sin tocar eso aquí).
+      cache.bulkUpdateLocations(locationEntries);
+    }
+  } catch (error) {
+    if (error.message.includes('rate limit')) {
+      reveClient.markLimited();
+    }
+    logger.warn('Failed to fetch Reve locations for matching', { error: error.message });
+  }
+
+  // Con cache: el índice de matching se construye desde el histórico completo acumulado, no
+  // solo desde lo fetcheado en este ciclo. Sin cache (p. ej. collector.enrich() puntual sin
+  // cacheDir): no hay nada que acumular entre llamadas, así que se usa directamente lo recién
+  // fetcheado, igual que antes de este cambio.
+  const normalizedReve = cache
+    ? Object.values(cache.loadAllLocations())
+    : fetchedLocations.map(normalizeReveLocation).filter(Boolean);
+
   let statusData = [];
   let tariffsData = [];
 
@@ -349,28 +400,13 @@ async function enrichStations(stations, options = {}) {
     cache.bulkUpdateTariffs(tariffEntries);
   }
 
-  const tariffMap = buildTariffMap(tariffsData);
-  const statusMap = buildStatusMap(statusData);
-
-  let reveLocations = [];
-  try {
-    const locOpts = { dateFrom: statusDateFrom };
-    if (typeof onlyDynamicInfo === 'boolean') {
-      locOpts.extraParams = { only_dynamic_info: onlyDynamicInfo };
-    }
-    reveLocations = await reveClient.fetchLocations(locOpts);
-  } catch (error) {
-    if (error.message.includes('rate limit')) {
-      reveClient.markLimited();
-    }
-    logger.warn('Failed to fetch Reve locations for matching', { error: error.message });
-  }
-
-  const normalizedReve = [];
-  for (const loc of reveLocations) {
-    const n = normalizeReveLocation(loc);
-    if (n) normalizedReve.push(n);
-  }
+  // Igual que las ubicaciones: si hay cache, el matching usa el histórico completo acumulado
+  // (loadAllStatus/loadAllTariffs, ya en la forma final de statusMap/tariffMap) en vez de solo
+  // lo que haya traído el fetch de este ciclo — que en un refresh incremental exitoso puede ser
+  // solo un subconjunto (lo "modificado desde dateFrom"). Sin esto, un EVSE que no cambió de
+  // estado recientemente perdería su disponibilidad ya conocida aunque siga en cache.
+  const tariffMap = cache ? cache.loadAllTariffs() : buildTariffMap(tariffsData);
+  const statusMap = cache ? cache.loadAllStatus() : buildStatusMap(statusData);
 
   logger.info('Building spatial index for Reve locations', { count: normalizedReve.length });
   const index = new SpatialIndex();

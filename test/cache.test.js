@@ -98,6 +98,44 @@ test('updateTariff updates timestamp in meta', () => {
   fs.rmSync(dir, { recursive: true });
 });
 
+test('loadAllLocations returns empty object when no cache exists', () => {
+  const dir = tempDir();
+  const cache = createReveCache(dir);
+  assert.deepEqual(cache.loadAllLocations(), {});
+  assert.equal(cache.getLastLocationsFetchDate(), null);
+
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('bulkUpdateLocations persists, merges, and bumps lastLocationsFetch', () => {
+  const dir = tempDir();
+  const cache = createReveCache(dir);
+
+  cache.bulkUpdateLocations({
+    'reve-1': { reveLocationId: 'reve-1', lat: 40.4, lon: -3.7 },
+  });
+
+  let all = cache.loadAllLocations();
+  assert.equal(Object.keys(all).length, 1);
+  assert.equal(all['reve-1'].lat, 40.4);
+
+  const firstFetch = cache.getLastLocationsFetchDate();
+  assert.ok(firstFetch);
+
+  // Un segundo bulkUpdateLocations con una ubicación distinta debe MERGEAR, no reemplazar la
+  // colección entera — así es como se acumula cobertura entre ciclos limitados por rate limit.
+  cache.bulkUpdateLocations({
+    'reve-2': { reveLocationId: 'reve-2', lat: 41.0, lon: -4.0 },
+  });
+
+  all = cache.loadAllLocations();
+  assert.equal(Object.keys(all).length, 2, 'la ubicación del primer ciclo debe seguir presente');
+  assert.ok(all['reve-1']);
+  assert.ok(all['reve-2']);
+
+  fs.rmSync(dir, { recursive: true });
+});
+
 test('cache is atomic (uses tmp + rename)', () => {
   const dir = tempDir();
   const cache = createReveCache(dir);

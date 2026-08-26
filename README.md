@@ -273,19 +273,34 @@ desde la [API Reve de Red Eléctrica](https://www.mapareve.es/). Requiere una AP
 
 ### How it works / Cómo funciona
 
-1. Fetches operational status and tariffs from Reve API (paginated, 100/page).
-2. Caches Reve data on disk for incremental refreshes (avoids re-fetching unchanged data).
-3. Builds a spatial index of Reve locations.
+1. Fetches Reve **locations first** (see Rate limit below for why), then operational status,
+   then tariffs — all paginated, 100/page.
+2. Caches Reve data on disk for incremental refreshes. Locations, status and tariffs all
+   **accumulate** across calls (each call merges into what's already cached instead of
+   replacing it), since a single call rarely has enough rate-limit budget to fetch everything.
+3. Builds a spatial index from the **full accumulated set of cached locations** (not just what
+   this call fetched).
 4. Matches each DGT station to the nearest Reve location by geographic proximity.
-5. Merges prices, availability, and operator data into the station object.
+5. Merges prices, availability, and operator data into the station object, resolving prices/
+   availability from the full accumulated status/tariffs cache too (not just this call's fetch).
 
 ### Rate limit / Límite de velocidad
 
-The Reve API allows **5 requests per hour**. The collector:
-- Fetches all needed data in a single pass (locations + status + tariffs = 3 requests).
-- Uses `date_from` for incremental refreshes on subsequent runs.
-- Falls back to cached data if the API is rate-limited.
-- A full initial load of ~14,500 locations takes ~30 hours at 5 req/h.
+The Reve API allows **5 requests per hour**, shared across locations + status + tariffs in that
+order — **locations first**, always, because without a location there's nothing to match a DGT
+station against regardless of how much status/tariff data is available. status/tariffs get
+whatever budget remains after locations, which can be zero.
+
+The collector:
+- Uses `date_from` for incremental refreshes on subsequent calls (locations, status and tariffs
+  each track their own last-successful-fetch date independently).
+- Falls back to cached data if the API is rate-limited or fails.
+- A full initial load of ~14,500 locations takes multiple hourly cycles at 5 req/h (each cycle
+  fetches as many pages as the remaining budget allows and merges them into the cache — coverage
+  grows cycle over cycle, it isn't lost between calls).
+- A locations fetch that fails does **not** advance its cached "last fetch" date, so a failed
+  attempt doesn't cause the next attempt to (incorrectly) ask Reve for only what changed since
+  the failed attempt's timestamp.
 
 ### Usage / Uso
 
@@ -334,11 +349,12 @@ const enriched = await collector.enrich(existingStations, {
 
 ### Enrich options / Opciones de enriquecimiento
 
-| Option           | Type     | Default | Description                                                       |
-| ---------------- | -------- | ------- | ----------------------------------------------------------------- |
-| `reveApiKey`     | `string` | —       | **Required.** Reve API key from mapareve.es.                      |
-| `cacheDir`       | `string` | —       | Directory for Reve data cache files. Enables incremental refresh. |
-| `thresholdMeters`| `number` | `50`    | Max distance (meters) to match a DGT station to a Reve location.  |
+| Option             | Type      | Default | Description                                                                                                  |
+| ------------------ | --------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `reveApiKey`       | `string`  | —       | **Required.** Reve API key from mapareve.es.                                                                 |
+| `cacheDir`         | `string`  | —       | Directory for Reve data cache files. Enables incremental refresh and cross-call accumulation.                 |
+| `thresholdMeters`  | `number`  | `50`    | Max distance (meters) to match a DGT station to a Reve location.                                             |
+| `onlyDynamicInfo`  | `boolean` | —       | When set, filters the locations fetch to only locations with dynamic (price/availability) data, saving requests on incremental refreshes. Leave unset on the first call to get the full location set. |
 
 ---
 

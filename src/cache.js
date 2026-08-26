@@ -27,10 +27,13 @@ function createReveCache(dirPath) {
 
   const statusFile = path.join(dirPath, 'operational_status.json');
   const tariffsFile = path.join(dirPath, 'tariffs.json');
+  const locationsFile = path.join(dirPath, 'locations.json');
   const metaFile = path.join(dirPath, 'meta.json');
 
   function loadMeta() {
-    return readJson(metaFile) || { lastStatusFetch: null, lastTariffsFetch: null };
+    return (
+      readJson(metaFile) || { lastStatusFetch: null, lastTariffsFetch: null, lastLocationsFetch: null }
+    );
   }
 
   function saveMeta(meta) {
@@ -53,6 +56,14 @@ function createReveCache(dirPath) {
     writeJson(tariffsFile, data);
   }
 
+  function loadLocations() {
+    return readJson(locationsFile) || {};
+  }
+
+  function saveLocations(data) {
+    writeJson(locationsFile, data);
+  }
+
   return {
     getStatusByEvseId(evseId) {
       const cache = loadStatus();
@@ -70,6 +81,10 @@ function createReveCache(dirPath) {
 
     getLastTariffsFetchDate() {
       return loadMeta().lastTariffsFetch;
+    },
+
+    getLastLocationsFetchDate() {
+      return loadMeta().lastLocationsFetch;
     },
 
     updateStatus(evseId, statusEntry) {
@@ -112,12 +127,31 @@ function createReveCache(dirPath) {
       saveMeta(meta);
     },
 
+    // A diferencia de bulkUpdateStatus/bulkUpdateTariffs (llamadas incondicionalmente incluso
+    // cuando el fetch falló y se recompuso desde cache), esta se llama solo dentro del try de un
+    // fetch de locations que tuvo éxito de verdad — así lastLocationsFetch nunca se envenena con
+    // la fecha de un intento fallido.
+    bulkUpdateLocations(entries) {
+      const cache = loadLocations();
+      for (const [locationId, entry] of Object.entries(entries)) {
+        cache[locationId] = entry;
+      }
+      saveLocations(cache);
+      const meta = loadMeta();
+      meta.lastLocationsFetch = new Date().toISOString();
+      saveMeta(meta);
+    },
+
     loadAllStatus() {
       return loadStatus();
     },
 
     loadAllTariffs() {
       return loadTariffs();
+    },
+
+    loadAllLocations() {
+      return loadLocations();
     },
   };
 }
