@@ -6,6 +6,7 @@ const path = require('node:path');
 const {
   enrichStationsExperimental,
   normalizeRevePublicLocation,
+  normalizeStationName,
   mergePublicPrices,
   mergePublicAvailability,
 } = require('../src/enrich-experimental');
@@ -251,4 +252,108 @@ test('enrichStationsExperimental without cacheDir always restarts at page 1 (no 
   await enrichStationsExperimental([], opts);
 
   assert.deepEqual(capturedPages, [1, 1], 'every call starts at page 1 without cacheDir');
+});
+
+test('normalizeStationName is accent/case insensitive', () => {
+  assert.equal(normalizeStationName('Repsol, Elorrio, Vía Pública'), normalizeStationName('REPSOL, ELORRIO, VIA PUBLICA'));
+  assert.equal(normalizeStationName(null), null);
+  assert.equal(normalizeStationName('   '), null);
+});
+
+test('enrichStationsExperimental matches by exact name even when far outside thresholdMeters', async () => {
+  // Reve location is 400km from the DGT station's coordinates — proximity alone would
+  // never match, but the names are identical (after normalization).
+  const reveLoc = samplePublicLocation({ id: 'reve-far', name: 'Repsol, Elorrio, Vía Pública' });
+  const fakeHttpClient = {
+    post: async (url, data, config) => ({
+      status: 200,
+      data: { data: [reveLoc], pagination: { page: config.params.page, per_page: 25, total_pages: 1, total_count: 1 } },
+    }),
+  };
+
+  const stations = [
+    {
+      sourceStationId: 'dgt-name-match',
+      name: 'REPSOL, ELORRIO, VIA PUBLICA', // same name, different case/accents
+      location: { type: 'Point', coordinates: [-8.0, 39.0] }, // far from reveLoc's 40.4168,-3.7038
+      prices: undefined,
+      availability: undefined,
+    },
+  ];
+
+  const result = await enrichStationsExperimental(stations, {
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    thresholdMeters: 50, // would reject this on distance alone
+  });
+
+  assert.equal(result[0].reveLocationId, 'reve-far');
+});
+
+test('enrichStationsExperimental disambiguates same-named Reve locations by nearest', async () => {
+  const near = samplePublicLocation({
+    id: 'reve-near',
+    name: 'Repsol',
+    coordinates: { latitude: '40.42', longitude: '-3.70' },
+  });
+  const far = samplePublicLocation({
+    id: 'reve-far-dup',
+    name: 'Repsol',
+    coordinates: { latitude: '41.5', longitude: '-4.5' },
+  });
+
+  const fakeHttpClient = {
+    post: async (url, data, config) => ({
+      status: 200,
+      data: { data: [near, far], pagination: { page: config.params.page, per_page: 25, total_pages: 1, total_count: 2 } },
+    }),
+  };
+
+  const stations = [
+    {
+      sourceStationId: 'dgt-dup-name',
+      name: 'Repsol',
+      location: { type: 'Point', coordinates: [-3.7038, 40.4168] }, // close to "near"
+      prices: undefined,
+      availability: undefined,
+    },
+  ];
+
+  const result = await enrichStationsExperimental(stations, {
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  assert.equal(result[0].reveLocationId, 'reve-near', 'ambiguous name match should resolve to the nearest candidate');
+});
+
+test('enrichStationsExperimental falls back to proximity when there is no name match', async () => {
+  const reveLoc = samplePublicLocation({ id: 'reve-prox-only', name: 'Totally Different Name' });
+  const fakeHttpClient = {
+    post: async (url, data, config) => ({
+      status: 200,
+      data: { data: [reveLoc], pagination: { page: config.params.page, per_page: 25, total_pages: 1, total_count: 1 } },
+    }),
+  };
+
+  const stations = [
+    {
+      sourceStationId: 'dgt-no-name-match',
+      name: 'DGT Station Name',
+      location: { type: 'Point', coordinates: [-3.7038, 40.4168] }, // matches reveLoc's coords
+      prices: undefined,
+      availability: undefined,
+    },
+  ];
+
+  const result = await enrichStationsExperimental(stations, {
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    thresholdMeters: 100,
+  });
+
+  assert.equal(result[0].reveLocationId, 'reve-prox-only');
 });

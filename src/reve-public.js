@@ -20,10 +20,11 @@ const REVE_PUBLIC_BASE_URL = 'https://www.mapareve.es/api/public/v1';
 const DEFAULT_TIMEOUT = 30000;
 const DEFAULT_RETRIES = 2;
 // Confirmed live (2026-08-26): POST /locations returns 400 "per_page no tiene un valor
-// válido" for values other than 10 — the only page size the mapareve.es frontend itself
-// ever sends for this endpoint. Not documented anywhere, so treat as the only known-safe
-// value until proven otherwise.
-const DEFAULT_PAGE_SIZE = 10;
+// válido" above 25 — tested 10/15/20/25 (all 200) vs 30/50/100 (all 400), so the real
+// constraint is a max of 25, not a fixed value. Not documented anywhere, and the frontend
+// itself only ever sends 10 for this endpoint — treat 25 as the known-safe ceiling, not a
+// guaranteed-stable contract.
+const DEFAULT_PAGE_SIZE = 25;
 // Confirmed live (2026-08-26): POST /locations returns 400 "latitude_ne/longitude_ne/
 // latitude_sw/longitude_sw es obligatorio" without a bounding box — despite the frontend
 // code appearing to strip these for its "national list" view (see ne(t, true) in the
@@ -31,12 +32,12 @@ const DEFAULT_PAGE_SIZE = 10;
 // same range used in test/live.test.js) so callers get nationwide results without having
 // to know about this quirk; still overridable via `filters`.
 const SPAIN_BBOX = { latitude_ne: 44, longitude_ne: 4.5, latitude_sw: 27, longitude_sw: -18.5 };
-// Confirmed live (2026-08-26): per_page is fixed at 10, so a full-Spain sweep of POST
-// /locations is ~1450 sequential requests (~14,500 locations ÷ 10) — not a "few requests",
+// Confirmed live (2026-08-26): per_page tops out at 25, so a full-Spain sweep of POST
+// /locations is ~582 sequential requests (~14,550 locations ÷ 25) — not a "few requests",
 // and not something to run unbounded on a schedule against an endpoint with no documented
 // rate limit or SLA. maxPages defaults low on purpose: a caller who genuinely wants
 // nationwide coverage has to raise it explicitly and accept that request volume.
-const DEFAULT_MAX_PAGES = 50; // 500 locations
+const DEFAULT_MAX_PAGES = 50; // 1,250 locations at per_page=25
 // No documented rate limit exists for this endpoint. This delay between paginated
 // requests is a self-imposed courtesy throttle, not a requirement from Reve.
 const DEFAULT_REQUEST_DELAY_MS = 150;

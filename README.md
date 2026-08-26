@@ -386,23 +386,32 @@ const enriched = await experimental.enrichStationsExperimental(stations, {
 (`reveLocationId`, `operator`, `prices`, `availability`) match `enrichStations()` exactly,
 so it's a drop-in comparison for the same `stations` array.
 
-**⚠️ Request volume — read before running this on a schedule.** `POST /locations` only
-accepts `per_page: 10` (confirmed live — any other value 400s) and requires a bounding box
-(defaults to all of Spain if you don't pass one via `filters`). Covering the whole country
-is therefore **~1,450 sequential requests** (~14,500 locations ÷ 10), not "a couple of
-calls". `maxPages` defaults to **50** (500 locations) for exactly this reason — raising it
-to cover all of Spain means committing to ~1,450 requests against an endpoint with no
-documented rate limit or SLA, on every run. If this runs on a cron, size `maxPages` (or
-scope `filters` to a region/CPO) deliberately; don't default to "fetch everything."
+**⚠️ Request volume — read before running this on a schedule.** `POST /locations` caps
+`per_page` at **25** (confirmed live — 10/15/20/25 all work, 30/50/100 all 400) and requires
+a bounding box (defaults to all of Spain if you don't pass one via `filters`). Covering the
+whole country is therefore **~582 sequential requests** (~14,550 locations ÷ 25), not "a
+couple of calls". `maxPages` defaults to **50** (1,250 locations, at `per_page: 25`) for
+exactly this reason — raising it to cover all of Spain means committing to ~582 requests
+against an endpoint with no documented rate limit or SLA, on every run. If this runs on a
+cron, size `maxPages` (or scope `filters` to a region/CPO) deliberately; don't default to
+"fetch everything."
 
 **Covering more than `maxPages` over time: pass `cacheDir`.** Without it, every call starts
 back at page 1 and only that call's fetch is used — coverage never grows. With `cacheDir`
 set, each call picks up at the page the previous call stopped on (persisted to
 `<cacheDir>/reve_public_sweep.json`) and merges newly-fetched locations into what's already
 accumulated there, so an hourly cron with `maxPages: 50` covers pages 1-50 on the first run,
-51-100 on the next, and so on — full national coverage in ~29 runs (~29 hours at 50
-pages/run) instead of one 1,450-request burst. Once a sweep completes, the cursor wraps back
-to page 1 to pick up changes (status, tariffs, new sites) in Reve's data.
+51-100 on the next, and so on — full national coverage in ~12 runs (~12 hours at 50
+pages/run, 1,250 locations/run) instead of one 582-request burst. Once a sweep completes,
+the cursor wraps back to page 1 to pick up changes (status, tariffs, new sites) in Reve's
+data.
+
+**Matching: exact name first, proximity as fallback.** For each station, if a Reve location
+exists whose `name` matches exactly (case/accent-insensitive) it's used regardless of
+distance; if more than one Reve location shares that exact name, the nearest of those wins.
+Only when there's no name match at all does it fall back to nearest-within-`thresholdMeters`
+(the only strategy before this). The enrichment-complete log reports `matchedByName` vs
+`matchedByProximity` so you can see which one fired.
 
 ```js
 const enriched = await experimental.enrichStationsExperimental(stations, {
@@ -419,24 +428,32 @@ bundle JS (no la `/api/external/v1` documentada que usa el resto de esta librer�
 requiere API key, no se observó ningún límite de peticiones documentado, y devuelve el
 estado y las tarifas ya embebidos por emplazamiento en cada página.
 
-**⚠️ Volumen de peticiones — leer antes de ponerlo en un cron.** `POST /locations` solo
-acepta `per_page: 10` (confirmado en vivo — cualquier otro valor da 400) y exige un bounding
-box (por defecto, toda España si no pasas uno vía `filters`). Cubrir el país entero son por
-tanto **~1.450 peticiones secuenciales** (~14.500 ubicaciones ÷ 10), no "un par de
-llamadas". `maxPages` viene con **50** por defecto (500 ubicaciones) precisamente por esto —
-subirlo para cubrir toda España implica asumir ~1.450 peticiones contra un endpoint sin
-límite ni SLA documentados, en cada ejecución. Si esto corre en un cron, dimensiona
-`maxPages` (o acota `filters` a una región/CPO) a propósito; no lo dejes en "traer todo".
+**⚠️ Volumen de peticiones — leer antes de ponerlo en un cron.** `POST /locations` limita
+`per_page` a **25 como máximo** (confirmado en vivo — 10/15/20/25 funcionan, 30/50/100 dan
+400) y exige un bounding box (por defecto, toda España si no pasas uno vía `filters`).
+Cubrir el país entero son por tanto **~582 peticiones secuenciales** (~14.550 ubicaciones ÷
+25), no "un par de llamadas". `maxPages` viene con **50** por defecto (1.250 ubicaciones, con
+`per_page: 25`) precisamente por esto — subirlo para cubrir toda España implica asumir ~582
+peticiones contra un endpoint sin límite ni SLA documentados, en cada ejecución. Si esto
+corre en un cron, dimensiona `maxPages` (o acota `filters` a una región/CPO) a propósito; no
+lo dejes en "traer todo".
 
 **Para cubrir más que `maxPages` a lo largo del tiempo: pasa `cacheDir`.** Sin él, cada
 llamada vuelve a empezar en la página 1 y solo se usa lo que trae esa llamada — la cobertura
 nunca crece. Con `cacheDir`, cada llamada continúa desde la página donde se quedó la anterior
 (persistido en `<cacheDir>/reve_public_sweep.json`) y fusiona las ubicaciones nuevas con las
 ya acumuladas, así que un cron horario con `maxPages: 50` cubre las páginas 1-50 en la
-primera ejecución, 51-100 en la siguiente, etc. — cobertura nacional completa en ~29
-ejecuciones (~29 horas a 50 páginas/ejecución) en vez de una ráfaga de 1.450 peticiones de
-golpe. Al completar una vuelta entera, el cursor vuelve a la página 1 para recoger cambios
-(estado, tarifas, nuevos emplazamientos) en los datos de Reve.
+primera ejecución, 51-100 en la siguiente, etc. — cobertura nacional completa en ~12
+ejecuciones (~12 horas a 50 páginas/ejecución, 1.250 ubicaciones/ejecución) en vez de una
+ráfaga de 582 peticiones de golpe. Al completar una vuelta entera, el cursor vuelve a la
+página 1 para recoger cambios (estado, tarifas, nuevos emplazamientos) en los datos de Reve.
+
+**Matching: primero nombre exacto, proximidad como respaldo.** Para cada estación, si existe
+una ubicación Reve cuyo `name` coincide exactamente (ignorando mayúsculas/acentos) se usa
+sin importar la distancia; si varias ubicaciones Reve comparten ese nombre exacto, gana la
+más cercana de esas. Solo si no hay ningún nombre coincidente cae al comportamiento anterior
+(más cercana dentro de `thresholdMeters`). El log de fin de enriquecimiento reporta
+`matchedByName` vs `matchedByProximity` para que veas cuál se disparó.
 
 ```js
 const enriched = await experimental.enrichStationsExperimental(stations, {

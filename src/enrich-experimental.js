@@ -14,7 +14,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createRevePublicClient } = require('./reve-public');
 const { readJson, writeJson } = require('./cache');
-const { SpatialIndex, STATUS_PRIORITY, DEFAULT_THRESHOLD_METERS } = require('./enrich');
+const { SpatialIndex, STATUS_PRIORITY, DEFAULT_THRESHOLD_METERS, haversineMeters } = require('./enrich');
+
+// Strips accents/case so "Repsol, Elorrio" and "REPSOL, ELORRIO" (or minor encoding
+// differences) still count as the same name — an exact match after this normalization is
+// treated as authoritative and skips the distance check entirely (see enrichStationsExperimental).
+function normalizeStationName(name) {
+  if (typeof name !== 'string') return null;
+  const normalized = name.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+  return normalized || null;
+}
 
 function normalizeRevePublicLocation(loc) {
   const lat = parseFloat(loc.coordinates?.latitude);
@@ -128,11 +137,11 @@ async function enrichStationsExperimental(stations, options = {}) {
     logger = console,
     acknowledgeUnsupported,
     filters = {},
-    // See reve-public.js: 10 is the only per_page value POST /locations accepts.
-    perPage = 10,
-    // See reve-public.js DEFAULT_MAX_PAGES: nationwide coverage is ~1450 pages at
-    // per_page=10. Left undefined here so reve-public.js's conservative default (50
-    // pages / 500 locations) applies unless the caller deliberately raises it — do NOT
+    // See reve-public.js: 25 is the confirmed max per_page POST /locations accepts.
+    perPage = 25,
+    // See reve-public.js DEFAULT_MAX_PAGES: nationwide coverage is ~582 pages at
+    // per_page=25. Left undefined here so reve-public.js's conservative default (50
+    // pages / 1,250 locations) applies unless the caller deliberately raises it — do NOT
     // default this to "cover all of Spain" on a schedule without reading that comment.
     maxPages,
     // Directory to persist pagination progress + accumulated locations across calls. With
@@ -182,12 +191,20 @@ async function enrichStationsExperimental(stations, options = {}) {
 
   logger.info('Building spatial index for Reve public locations', { count: normalizedReve.length });
   const index = new SpatialIndex();
+  const nameIndex = new Map(); // normalizedName -> RevLocation[]
   for (const loc of normalizedReve) {
     index.insert(loc, loc.lat, loc.lon);
+    const key = normalizeStationName(loc.name);
+    if (key) {
+      if (!nameIndex.has(key)) nameIndex.set(key, []);
+      nameIndex.get(key).push(loc);
+    }
   }
 
   const enriched = [];
   let matched = 0;
+  let matchedByName = 0;
+  let matchedByProximity = 0;
 
   for (const station of stations) {
     const coords = station.location?.coordinates;
@@ -197,14 +214,46 @@ async function enrichStationsExperimental(stations, options = {}) {
     }
 
     const [lon, lat] = coords;
-    const hit = index.findNearest(lat, lon, thresholdMeters);
-    if (!hit) {
+
+    // Exact name match (after accent/case normalization) wins outright — no distance check.
+    // If more than one Reve location shares that exact name, proximity breaks the tie.
+    let reve = null;
+    let matchedBy = null;
+    const nameKey = normalizeStationName(station.name);
+    const nameCandidates = nameKey ? nameIndex.get(nameKey) : undefined;
+    if (nameCandidates?.length === 1) {
+      reve = nameCandidates[0];
+      matchedBy = 'name';
+    } else if (nameCandidates?.length > 1) {
+      let best = null;
+      let bestDist = Infinity;
+      for (const candidate of nameCandidates) {
+        const dist = haversineMeters(lat, lon, candidate.lat, candidate.lon);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = candidate;
+        }
+      }
+      reve = best;
+      matchedBy = 'name';
+    }
+
+    if (!reve) {
+      const hit = index.findNearest(lat, lon, thresholdMeters);
+      if (hit) {
+        reve = hit.item;
+        matchedBy = 'proximity';
+      }
+    }
+
+    if (!reve) {
       enriched.push(station);
       continue;
     }
 
     matched += 1;
-    const reve = hit.item;
+    if (matchedBy === 'name') matchedByName += 1;
+    else matchedByProximity += 1;
 
     enriched.push({
       ...station,
@@ -218,6 +267,8 @@ async function enrichStationsExperimental(stations, options = {}) {
   logger.info('Experimental public-API enrichment complete', {
     totalStations: stations.length,
     matched,
+    matchedByName,
+    matchedByProximity,
     withPrices: enriched.filter((s) => s.prices).length,
     withAvailability: enriched.filter((s) => s.availability).length,
   });
@@ -228,6 +279,7 @@ async function enrichStationsExperimental(stations, options = {}) {
 module.exports = {
   enrichStationsExperimental,
   normalizeRevePublicLocation,
+  normalizeStationName,
   mergePublicPrices,
   mergePublicAvailability,
 };
