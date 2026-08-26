@@ -358,6 +358,54 @@ const enriched = await collector.enrich(existingStations, {
 
 ---
 
+## Experimental: undocumented public API / Experimental: API pública no documentada
+
+**EN:** `experimental.createRevePublicClient` and `experimental.enrichStationsExperimental`
+talk to `https://www.mapareve.es/api/public/v1` — the internal, unauthenticated API the
+mapareve.es map itself uses in the browser, reverse-engineered from its JS bundle (not the
+documented `/api/external/v1` used by the rest of this library). It needs **no API key**
+and no documented rate limit was observed, and it returns status and tariffs already
+embedded per location (one paginated call instead of three separate feeds).
+
+None of that makes it supported: it is not published by Red Eléctrica, can change or
+disappear without notice, and automated use outside a browser may fall outside the site's
+terms of use. It is kept **separate from the stable exports** for exactly that reason —
+use it to evaluate parity with `/api/external/v1`, not as a production dependency.
+
+```js
+const { experimental } = require('@gasolinaradar/dgt-ev-collector');
+
+const enriched = await experimental.enrichStationsExperimental(stations, {
+  acknowledgeUnsupported: true, // required — you're opting into an unsupported endpoint
+});
+```
+
+`acknowledgeUnsupported: true` is required by both `createRevePublicClient(...)` and
+`enrichStationsExperimental(stations, ...)` — omitting it throws. Output fields
+(`reveLocationId`, `operator`, `prices`, `availability`) match `enrichStations()` exactly,
+so it's a drop-in comparison for the same `stations` array.
+
+**ES:** `experimental.createRevePublicClient` y `experimental.enrichStationsExperimental`
+hablan con `https://www.mapareve.es/api/public/v1` — la API interna y sin autenticación que
+usa el propio mapa de mapareve.es en el navegador, obtenida por ingeniería inversa de su
+bundle JS (no la `/api/external/v1` documentada que usa el resto de esta librería). No
+requiere API key y no se observó ningún límite de peticiones documentado, y devuelve el
+estado y las tarifas ya embebidos por emplazamiento (una sola llamada paginada en vez de
+tres feeds separados).
+
+Nada de eso la hace soportada: no está publicada por Red Eléctrica, puede cambiar o
+desaparecer sin aviso, y su uso automatizado fuera del navegador puede quedar fuera de los
+términos de uso del sitio. Se mantiene **separada de los exports estables** precisamente
+por eso — úsala para evaluar la paridad con `/api/external/v1`, no como dependencia de
+producción.
+
+`acknowledgeUnsupported: true` es obligatorio tanto en `createRevePublicClient(...)` como en
+`enrichStationsExperimental(stations, ...)` — omitirlo lanza un error. Los campos de salida
+(`reveLocationId`, `operator`, `prices`, `availability`) coinciden exactamente con los de
+`enrichStations()`, así que es una comparación directa para el mismo array `stations`.
+
+---
+
 ## Data source / Fuente de datos
 
 **EN:** The data is the public EV charging station dataset of the Spanish Directorate-General for Traffic (DGT), published at:
@@ -391,8 +439,10 @@ Este proyecto **no está afiliado** al Estado español ni a la DGT. Los datos pe
 ## Tests
 
 ```bash
-npm test        # unit tests (mocked HTTP)
-npm run test:live  # live tests hitting the real API (network required)
+npm test                 # unit tests (mocked HTTP) — includes the experimental client/enrichment
+npm run test:live        # live: real DGT dataset
+npm run test:live-public # live: real /api/public/v1 (experimental), no key needed (~5 requests)
+REVE_API_KEY=xxx npm run test:live-compare  # live: side-by-side vs /api/external/v1 (spends 1 of its 5 req/h)
 ```
 
 ---

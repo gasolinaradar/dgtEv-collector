@@ -3,6 +3,7 @@ const { createReveClient } = require('./reve');
 const { createReveCache } = require('./cache');
 
 const DEFAULT_THRESHOLD_METERS = 50;
+const STATUS_PRIORITY = ['CHARGING', 'AVAILABLE', 'RESERVED', 'BLOCKED', 'INOPERATIVE', 'OUTOFORDER', 'UNKNOWN', 'PLANNED', 'REMOVED'];
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
@@ -221,8 +222,7 @@ function mergeAvailability(evses, statusMap) {
 
   if (statuses.length === 0) return undefined;
 
-  const priority = ['CHARGING', 'AVAILABLE', 'RESERVED', 'BLOCKED', 'INOPERATIVE', 'OUTOFORDER', 'UNKNOWN', 'PLANNED', 'REMOVED'];
-  for (const p of priority) {
+  for (const p of STATUS_PRIORITY) {
     if (statuses.includes(p)) {
       return {
         status: p,
@@ -467,4 +467,5 @@ module.exports = {
   mergePrices,
   mergeAvailability,
   DEFAULT_THRESHOLD_METERS,
+  STATUS_PRIORITY,
 };

@@ -25,8 +25,10 @@
     "url": "https://github.com/gasolinaradar/dgt-ev-collector/issues"
   },
   "scripts": {
-    "test": "node --test test/collector.test.js test/reve.test.js test/cache.test.js test/enrich.test.js",
+    "test": "node --test test/collector.test.js test/reve.test.js test/cache.test.js test/enrich.test.js test/reve-public.test.js test/enrich-experimental.test.js",
     "test:live": "node --test test/live.test.js",
+    "test:live-public": "node --test test/live-public.test.js",
+    "test:live-compare": "node --test test/live-compare.test.js",
     "prepublishOnly": "npm test"
   },
   "keywords": [
