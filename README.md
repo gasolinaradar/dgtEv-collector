@@ -383,7 +383,11 @@ const enriched = await experimental.enrichStationsExperimental(stations, {
 `acknowledgeUnsupported: true` is required by both `createRevePublicClient(...)` and
 `enrichStationsExperimental(stations, ...)` — omitting it throws. Output fields
 (`reveLocationId`, `operator`, `prices`, `availability`) match `enrichStations()` exactly,
-so it's a drop-in comparison for the same `stations` array.
+so it's a drop-in comparison for the same `stations` array — plus one addition not present
+on the documented path: **`reveData`**, the exact raw location object matched from
+`POST /locations` (evses/connectors/tariffs/owner, unprocessed), kept so a consuming API can
+render or persist the full Reve object directly, or look it up again later via
+`GET /api/public/v1/locations/{reveLocationId}`.
 
 **⚠️ Request volume — no caching, full sweep every call.** There is no on-disk cache or
 resumable cursor: every call walks every page of the dataset, from page 1 through the last
@@ -452,7 +456,11 @@ producción.
 `acknowledgeUnsupported: true` es obligatorio tanto en `createRevePublicClient(...)` como en
 `enrichStationsExperimental(stations, ...)` — omitirlo lanza un error. Los campos de salida
 (`reveLocationId`, `operator`, `prices`, `availability`) coinciden exactamente con los de
-`enrichStations()`, así que es una comparación directa para el mismo array `stations`.
+`enrichStations()`, así que es una comparación directa para el mismo array `stations` — más
+un campo adicional que no existe en la vía documentada: **`reveData`**, el objeto crudo de
+la ubicación tal cual lo devuelve `POST /locations` (evses/conectores/tarifas/owner, sin
+procesar), para que una API propia pueda pintarlo o guardarlo directamente, o volver a
+consultarlo luego vía `GET /api/public/v1/locations/{reveLocationId}`.
 
 ---
 

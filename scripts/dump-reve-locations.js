@@ -1,25 +1,4 @@
 #!/usr/bin/env node
-// Standalone dump script for manual exploration of POST /api/public/v1/locations —
-// NOT part of the library, just a debugging tool. Writes one location per line (NDJSON)
-// to a local file, flushing after every page, so if it crashes mid-run you keep everything
-// fetched up to that point instead of losing it. Logs every single request/response to the
-// console (page, status, count, ms) so you can see exactly what's happening and where it
-// broke, if it breaks.
-//
-// Usage:
-//   node scripts/dump-reve-locations.js
-//   node scripts/dump-reve-locations.js --start-page 51 --max-pages 50 --out ./reve-dump.ndjson
-//   node scripts/dump-reve-locations.js --bbox '{"latitude_ne":41.45,"longitude_ne":2.25,"latitude_sw":41.35,"longitude_sw":2.10}'
-//
-// Flags (all optional):
-//   --start-page  N     page to start at (default 1)
-//   --max-pages   N     stop after this many pages, even if more remain (default 50)
-//   --per-page    N     confirmed valid range is 1-25; anything above 25 will 400 (default 25)
-//   --delay-ms    N     pause between requests, courtesy throttle (default 200)
-//   --out         PATH  NDJSON output file (default ./reve-dump.ndjson, relative to cwd)
-//   --bbox        JSON  overrides the default full-Spain bbox
-//   --filters     JSON  extra POST body fields (cpo_ids, power_min, connector_types, ...)
-
 const fs = require('node:fs');
 const path = require('node:path');
 const axios = require('axios');
@@ -71,7 +50,7 @@ async function main() {
     body,
   });
 
-  fs.writeFileSync(outPath, ''); // fresh file for this run — append per page below
+  fs.writeFileSync(outPath, '');
 
   let page = args.startPage;
   let totalPages = null;

@@ -1,28 +1,6 @@
-// EXPERIMENTAL / UNSUPPORTED — see src/reve-public.js for why.
-//
-// Mirrors enrichStations() from src/enrich.js field-for-field (same Station output shape:
-// reveLocationId, operator, prices, availability), but sources data from the undocumented
-// /api/public/v1 instead of the documented /api/external/v1. Kept as a separate module so
-// the supported path in enrich.js never depends on it.
-//
-// Functional difference worth noting: /api/public/v1 embeds status and tariffs directly
-// inside each location's evses/connectors, so this needs only one paginated call
-// (POST /locations) instead of three separate feeds (locations + operational_status +
-// tariffs) — at the cost of relying on an endpoint nobody guarantees will keep working.
-//
-// No persistence: every call walks every page of the dataset from page 1 through the last
-// one, fresh, every time — no on-disk cache/cursor across calls. That's ~582 requests per
-// full run at per_page=25 (see reve-public.js), so resilience matters more here than usual:
-// request()-level retries handle transient failures per page, and streamLocationPages skips
-// (rather than aborts on) an individual page that still fails after retries, so one bad page
-// doesn't throw away every other page already fetched in that run.
-
 const { createRevePublicClient } = require('./reve-public');
 const { SpatialIndex, STATUS_PRIORITY, DEFAULT_THRESHOLD_METERS, haversineMeters } = require('./enrich');
 
-// Strips accents/case so "Repsol, Elorrio" and "REPSOL, ELORRIO" (or minor encoding
-// differences) still count as the same name — an exact match after this normalization is
-// treated as authoritative and skips the distance check entirely (see enrichStationsExperimental).
 function normalizeStationName(name) {
   if (typeof name !== 'string') return null;
   const normalized = name.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
@@ -86,6 +64,7 @@ function normalizeRevePublicLocation(loc) {
     postalCode: loc.postal_code || null,
     allConnectors,
     evseStatuses,
+    raw: loc,
   };
 }
 
@@ -115,9 +94,6 @@ function mergePublicAvailability(reveLoc) {
   return { status: 'UNKNOWN', evseCount: statuses.length, lastUpdated: new Date().toISOString() };
 }
 
-// Effectively "no cap" — a full sweep is ~582 pages today (see reve-public.js), so this
-// just needs to be comfortably above that. Pass options.maxPages yourself to cap a run
-// instead (e.g. while testing), but the default here is "walk the whole dataset."
 const FULL_SWEEP_MAX_PAGES = 100000;
 
 async function enrichStationsExperimental(stations, options = {}) {
@@ -127,11 +103,7 @@ async function enrichStationsExperimental(stations, options = {}) {
     logger = console,
     acknowledgeUnsupported,
     filters = {},
-    // See reve-public.js: 25 is the confirmed max per_page POST /locations accepts.
     perPage = 25,
-    // Defaults to walking every page of the dataset (~582 requests today) every single
-    // call — no persistence, no partial coverage across runs. Pass a smaller value
-    // yourself if you deliberately want to cap a single run.
     maxPages = FULL_SWEEP_MAX_PAGES,
   } = options;
 
@@ -161,7 +133,7 @@ async function enrichStationsExperimental(stations, options = {}) {
 
   logger.info('Building spatial index for Reve public locations', { count: normalizedReve.length });
   const index = new SpatialIndex();
-  const nameIndex = new Map(); // normalizedName -> RevLocation[]
+  const nameIndex = new Map();
   for (const loc of normalizedReve) {
     index.insert(loc, loc.lat, loc.lon);
     const key = normalizeStationName(loc.name);
@@ -185,8 +157,6 @@ async function enrichStationsExperimental(stations, options = {}) {
 
     const [lon, lat] = coords;
 
-    // Exact name match (after accent/case normalization) wins outright — no distance check.
-    // If more than one Reve location shares that exact name, proximity breaks the tie.
     let reve = null;
     let matchedBy = null;
     const nameKey = normalizeStationName(station.name);
@@ -231,6 +201,7 @@ async function enrichStationsExperimental(stations, options = {}) {
       operator: reve.operator || station.operator,
       prices: mergePublicPrices(reve) || station.prices,
       availability: mergePublicAvailability(reve) || station.availability,
+      reveData: reve.raw,
     });
   }
 

@@ -138,6 +138,11 @@ test('enrichStationsExperimental matches DGT stations to Reve public locations b
   assert.equal(result[0].prices[0].price, 0.48);
   assert.ok(result[0].availability);
   assert.equal(result[0].availability.status, 'AVAILABLE');
+
+  // The exact raw API object is kept too, not just the flattened fields above.
+  assert.ok(result[0].reveData);
+  assert.equal(result[0].reveData.id, 'reve-pub-1');
+  assert.deepEqual(result[0].reveData, samplePublicLocation());
 });
 
 test('enrichStationsExperimental leaves stations untouched when nothing matches nearby', async () => {

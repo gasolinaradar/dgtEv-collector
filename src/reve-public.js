@@ -1,45 +1,11 @@
-// EXPERIMENTAL / UNSUPPORTED.
-//
-// This client talks to `https://www.mapareve.es/api/public/v1`, the internal API the
-// mapareve.es map itself uses in the browser — NOT the documented `/api/external/v1`
-// (see src/reve.js). It was reverse-engineered from the site's public JS bundle and a
-// handful of manual requests; it requires no API key and no documented rate limit was
-// observed, but:
-//
-//   - It is not published or supported by Red Eléctrica in any way.
-//   - It can change or disappear without notice.
-//   - Automated use outside a browser may fall outside the site's terms of use.
-//
-// Prefer `src/reve.js` (`/api/external/v1`) for anything that needs to keep working.
-// This module exists so the library can be evaluated against it in tests, not as a
-// recommended integration path — hence the explicit `acknowledgeUnsupported` gate below.
-
 const axios = require('axios');
 
 const REVE_PUBLIC_BASE_URL = 'https://www.mapareve.es/api/public/v1';
 const DEFAULT_TIMEOUT = 30000;
 const DEFAULT_RETRIES = 3;
-// Confirmed live (2026-08-26): POST /locations returns 400 "per_page no tiene un valor
-// válido" above 25 — tested 10/15/20/25 (all 200) vs 30/50/100 (all 400), so the real
-// constraint is a max of 25, not a fixed value. Not documented anywhere, and the frontend
-// itself only ever sends 10 for this endpoint — treat 25 as the known-safe ceiling, not a
-// guaranteed-stable contract.
 const DEFAULT_PAGE_SIZE = 25;
-// Confirmed live (2026-08-26): POST /locations returns 400 "latitude_ne/longitude_ne/
-// latitude_sw/longitude_sw es obligatorio" without a bounding box — despite the frontend
-// code appearing to strip these for its "national list" view (see ne(t, true) in the
-// bundle). Default to a box covering all of Spain (mainland + Balearics + Canary Islands,
-// same range used in test/live.test.js) so callers get nationwide results without having
-// to know about this quirk; still overridable via `filters`.
 const SPAIN_BBOX = { latitude_ne: 44, longitude_ne: 4.5, latitude_sw: 27, longitude_sw: -18.5 };
-// Confirmed live (2026-08-26): per_page tops out at 25, so a full-Spain sweep of POST
-// /locations is ~582 sequential requests (~14,550 locations ÷ 25) — not a "few requests",
-// and not something to run unbounded on a schedule against an endpoint with no documented
-// rate limit or SLA. maxPages defaults low on purpose: a caller who genuinely wants
-// nationwide coverage has to raise it explicitly and accept that request volume.
-const DEFAULT_MAX_PAGES = 50; // 1,250 locations at per_page=25
-// No documented rate limit exists for this endpoint. This delay between paginated
-// requests is a self-imposed courtesy throttle, not a requirement from Reve.
+const DEFAULT_MAX_PAGES = 50;
 const DEFAULT_REQUEST_DELAY_MS = 150;
 
 function resolveHttpClient(httpClientOption) {
@@ -74,11 +40,6 @@ async function request(httpClient, method, endpoint, { params, data } = {}, opts
       return response.data;
     } catch (error) {
       const status = error?.response?.status;
-      // Retry transient failures: no response at all (timeout, DNS failure, connection
-      // reset — axios/network errors never set error.response), HTTP 429, or 5xx. Never
-      // retry a definitive rejection: 400 (bad request — won't fix itself), 403 (most
-      // likely the Incapsula WAF — retrying/evading that automatically is out of scope
-      // for this client), or any other 4xx.
       const isRetryable = !error.response || status === 429 || (status >= 500 && status < 600);
       if (isRetryable && attempt < retries) {
         attempt += 1;
@@ -104,9 +65,6 @@ function unwrapPaginated(body) {
   return { data: Array.isArray(body?.data) ? body.data : [], pagination: body?.pagination || null };
 }
 
-// Yields `{ data, page, totalPages }` per page fetched (not just `data`) so callers that
-// need to resume a sweep across calls (see fetchLocationsSweep below) know exactly where
-// pagination stopped and whether it was because of maxPages or because the dataset ended.
 async function* streamLocationPages(httpClient, opts = {}) {
   const {
     perPage = DEFAULT_PAGE_SIZE,
@@ -115,12 +73,6 @@ async function* streamLocationPages(httpClient, opts = {}) {
     maxPages = DEFAULT_MAX_PAGES,
     startPage = 1,
     logger = console,
-    // A single page failing after its own request-level retries (see request() above)
-    // doesn't abort the whole sweep — it's skipped and the next page is tried, so one bad
-    // page doesn't throw away every other page already fetched in this call. This many
-    // page failures *in a row* means something is systemically broken (WAF, outage), not a
-    // transient blip, so the sweep stops instead of looping through the rest of the
-    // dataset blind.
     maxConsecutivePageFailures = 3,
     ...rest
   } = opts;
@@ -232,8 +184,6 @@ function createRevePublicClient(options = {}) {
       return unwrapPaginated(body);
     },
 
-    // Yields raw location arrays, one per page — same shape as before. Doesn't expose
-    // page/totalPages; use fetchLocationsSweep if you need to resume across calls.
     async *streamLocations(opts = {}) {
       for await (const { data } of streamLocationPages(httpClient, buildOpts(opts))) {
         yield data;
@@ -248,12 +198,6 @@ function createRevePublicClient(options = {}) {
       return results;
     },
 
-    // Like fetchAllLocations, but resumable: pass `startPage` (default 1) and read
-    // `nextPage`/`totalPages` off the result to continue from exactly where this call
-    // stopped on the next invocation — e.g. across scheduled runs, without ever exceeding
-    // `maxPages` requests in a single call. `nextPage` wraps back to 1 once a full sweep
-    // completes (dataset changes over time, so it's worth re-walking periodically), and
-    // `completedSweep` tells you whether that happened on this call.
     async fetchLocationsSweep(opts = {}) {
       const built = buildOpts(opts);
       const startPage = built.startPage ?? 1;
@@ -268,8 +212,6 @@ function createRevePublicClient(options = {}) {
       }
 
       if (lastPage === null) {
-        // Nothing fetched at all (maxPages: 0, or the very first page came back empty) —
-        // retry the same startPage next time instead of silently skipping it.
         return { locations, totalPages, nextPage: startPage, completedSweep: false };
       }
 
