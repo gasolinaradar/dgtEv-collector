@@ -115,7 +115,11 @@ async function enrichStationsExperimental(stations, options = {}) {
   try {
     reveLocations = await reveClient.fetchAllLocations({ filters, perPage });
   } catch (error) {
-    logger.warn('Failed to fetch Reve public locations for matching', { error: error.message });
+    logger.warn('Failed to fetch Reve public locations for matching', {
+      error: error.message,
+      status: error.response?.status,
+      responseBody: error.response?.data,
+    });
     return stations;
   }
 
