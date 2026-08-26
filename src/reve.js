@@ -15,11 +15,16 @@ function resolveLogger(loggerOption) {
   return loggerOption && typeof loggerOption.info === 'function' ? loggerOption : console;
 }
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 class ReveRateLimiter {
-  constructor(maxRequests = RATE_LIMIT_PER_HOUR) {
+  constructor(maxRequests = RATE_LIMIT_PER_HOUR, persistPath = null) {
     this.maxRequests = maxRequests;
     this.windowStart = Date.now();
     this.count = 0;
+    this.persistPath = persistPath;
+    this._load();
   }
 
   async waitForSlot() {
@@ -35,11 +40,45 @@ class ReveRateLimiter {
       );
     }
     this.count += 1;
+    this._save();
+  }
+
+  markLimited() {
+    this.count = this.maxRequests;
+    this._save();
   }
 
   reset() {
     this.windowStart = Date.now();
     this.count = 0;
+    this._save();
+  }
+
+  _save() {
+    if (!this.persistPath) return;
+    try {
+      const dir = path.dirname(this.persistPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const tmp = `${this.persistPath}.tmp`;
+      fs.writeFileSync(
+        tmp,
+        JSON.stringify({ windowStart: this.windowStart, count: this.count }),
+        'utf-8',
+      );
+      fs.renameSync(tmp, this.persistPath);
+    } catch { /* best-effort */ }
+  }
+
+  _load() {
+    if (!this.persistPath) return;
+    try {
+      const raw = fs.readFileSync(this.persistPath, 'utf-8');
+      const data = JSON.parse(raw);
+      if (typeof data.windowStart === 'number' && typeof data.count === 'number') {
+        this.windowStart = data.windowStart;
+        this.count = data.count;
+      }
+    } catch { /* first run or corrupt — use defaults */ }
   }
 }
 
@@ -167,7 +206,10 @@ function createReveClient(options = {}) {
   const logger = resolveLogger(options.logger);
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   const retries = options.retries ?? DEFAULT_RETRIES;
-  const rateLimiter = new ReveRateLimiter(options.rateLimit ?? RATE_LIMIT_PER_HOUR);
+  const rateLimiter = new ReveRateLimiter(
+    options.rateLimit ?? RATE_LIMIT_PER_HOUR,
+    options.rateLimitPersistPath ?? null,
+  );
 
   function buildOpts(overrides = {}) {
     return {
@@ -208,6 +250,10 @@ function createReveClient(options = {}) {
 
     async *streamTariffs(opts = {}) {
       yield* paginate(httpClient, '/connectors/tariffs', apiKey.trim(), buildOpts(opts));
+    },
+
+    markLimited() {
+      rateLimiter.markLimited();
     },
   };
 }

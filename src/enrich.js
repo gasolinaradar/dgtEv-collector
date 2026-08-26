@@ -1,3 +1,4 @@
+const path = require('node:path');
 const { createReveClient } = require('./reve');
 const { createReveCache } = require('./cache');
 
@@ -228,7 +229,12 @@ async function enrichStations(stations, options = {}) {
     return stations;
   }
 
-  const reveClient = createReveClient({ apiKey: reveApiKey, httpClient, logger });
+  const reveClient = createReveClient({
+    apiKey: reveApiKey,
+    httpClient,
+    logger,
+    rateLimitPersistPath: cacheDir ? path.join(cacheDir, 'rate_limit.json') : null,
+  });
   const cache = cacheDir ? createReveCache(cacheDir) : null;
 
   let statusData = [];
@@ -244,6 +250,9 @@ async function enrichStations(stations, options = {}) {
   try {
     statusData = await reveClient.fetchOperationalStatus({ dateFrom: statusDateFrom });
   } catch (error) {
+    if (error.message.includes('rate limit')) {
+      reveClient.markLimited();
+    }
     logger.warn('Failed to fetch Reve operational status', { error: error.message });
     if (cache) {
       const cached = cache.loadAllStatus();
@@ -259,6 +268,9 @@ async function enrichStations(stations, options = {}) {
   try {
     tariffsData = await reveClient.fetchTariffs({ dateFrom: tariffsDateFrom });
   } catch (error) {
+    if (error.message.includes('rate limit')) {
+      reveClient.markLimited();
+    }
     logger.warn('Failed to fetch Reve tariffs', { error: error.message });
     if (cache) {
       const cached = cache.loadAllTariffs();
@@ -318,6 +330,9 @@ async function enrichStations(stations, options = {}) {
   try {
     reveLocations = await reveClient.fetchLocations({ dateFrom: statusDateFrom });
   } catch (error) {
+    if (error.message.includes('rate limit')) {
+      reveClient.markLimited();
+    }
     logger.warn('Failed to fetch Reve locations for matching', { error: error.message });
   }
 
