@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { normalizeSite, extractText } = require('./normalize');
 const { createSiteParser, parseSitesFromXml } = require('./siteParser');
-const { enrichStations } = require('./enrich');
+const { enrichStations } = require('./reve-enrich');
 
 const DEFAULT_DGT_EV_URL =
   'https://infocar.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml';
@@ -207,7 +207,7 @@ async function fetchStations(options = {}, hooks = {}) {
     normalized.push(station);
   }
 
-  if (enrichOpts && enrichOpts.reveApiKey) {
+  if (enrichOpts && (enrichOpts.reveApiKey || enrichOpts.source === 'public')) {
     logger.info('Enriching stations with Reve data');
     return enrichStations(normalized, {
       ...enrichOpts,

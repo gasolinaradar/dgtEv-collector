@@ -1,10 +1,10 @@
-# Flujo de precios en `experimental` — para inspeccionar con Postman
+# Flujo de precios en la fuente `public` de Reve — para inspeccionar con Postman
 
 Este documento explica, paso a paso y con datos reales capturados contra `mapareve.es`,
-exactamente cómo `experimental.enrichStationsExperimental` obtiene y calcula el campo
-`prices[]` que acaba en cada estación. El objetivo es que puedas reproducir cada petición
-en Postman y comparar a mano contra lo que hace el código, para encontrar dónde está el
-desajuste que ves.
+exactamente cómo `enrichStations(stations, { source: 'public', acknowledgeUnsupported: true })`
+obtiene y calcula el campo `prices[]` que acaba en cada estación. El objetivo es que puedas
+reproducir cada petición en Postman y comparar a mano contra lo que hace el código, para
+encontrar dónde está el desajuste que ves.
 
 No es documentación de librería (no va en el README ni se publica) — es una chuleta de
 depuración.
@@ -178,7 +178,7 @@ curl -s "https://www.mapareve.es/api/public/v1/locations/0008eb32-d6c0-4485-a41f
 ```
 
 Devuelve el mismo objeto de arriba pero sin el envoltorio `{data, pagination}` — directamente
-el objeto de la ubicación. **Ojo**: `enrichStationsExperimental` **no usa este endpoint**
+el objeto de la ubicación. **Ojo**: `enrichStationsPublic` **no usa este endpoint**
 para el enriquecimiento masivo (solo usa el paginado de la sección 2); este GET es útil solo
 para que tú inspecciones una ubicación concreta a mano.
 
@@ -186,7 +186,7 @@ para que tú inspecciones una ubicación concreta a mano.
 
 ## 4. Paso 3 (código) — cómo se extrae `prices` de esa respuesta
 
-`src/enrich-experimental.js`, función `normalizeRevePublicLocation(loc)` (líneas 19-77):
+`src/enrich-public.js`, función `normalizeRevePublicLocation(loc)` (líneas 19-77):
 
 ```js
 for (const evse of loc.evses) {
@@ -227,7 +227,7 @@ array `prices`.
 
 ## 5. Paso 4 (código) — cómo se aplanan/deduplican esos precios
 
-`src/enrich-experimental.js`, función `mergePublicPrices(reveLoc)` (líneas 79-91):
+`src/enrich-public.js`, función `mergePublicPrices(reveLoc)` (líneas 79-91):
 
 ```js
 function mergePublicPrices(reveLoc) {
@@ -268,7 +268,7 @@ Puntos que suelen sorprender:
 ## 6. Cómo se decide QUÉ ubicación Reve aplica a cada estación (matching)
 
 **Actualizado**: ya no es solo proximidad. Ahora es **nombre exacto primero, proximidad como
-respaldo**. `src/enrich-experimental.js`, dentro de `enrichStationsExperimental`:
+respaldo**. `src/enrich-public.js`, dentro de `enrichStationsPublic`:
 
 ```js
 const nameIndex = new Map(); // nombre normalizado -> [ubicaciones Reve]
@@ -305,7 +305,7 @@ similitud difusa (Levenshtein, etc.) todavía.
   esas — no por la más cercana de *todas*.
 - **Solo si no hay ningún nombre coincidente** se usa proximidad pura dentro de
   `thresholdMeters` (comportamiento anterior, sigue existiendo como red de seguridad).
-- El log `Experimental public-API enrichment complete` ahora trae `matchedByName` y
+- El log `Reve public-API enrichment complete` ahora trae `matchedByName` y
   `matchedByProximity` por separado — mira esos números primero para saber qué vía se usó en
   tu caso concreto antes de rebuscar en Postman.
 
@@ -324,7 +324,7 @@ dos sitios físicos distintos con el mismo nombre genérico (marca sin más cont
 En este orden, de más probable a menos probable:
 
 0. **¿Por qué vía matcheó?** Mira `matchedByName` vs `matchedByProximity` en el log
-   `Experimental public-API enrichment complete` (sección 6) — te dice directamente si el
+   `Reve public-API enrichment complete` (sección 6) — te dice directamente si el
    caso que te extraña vino por nombre exacto o por cercanía, antes de investigar nada más.
 1. **¿Es la ubicación correcta?** Confirma con `GET /locations/{id}` que el nombre/dirección
    de la ubicación Reve matcheada coincide con la estación DGT esperada (sección 6).
@@ -368,7 +368,8 @@ node scripts/reconcile-dgt-reve.js --dgt ./dgt-dump.ndjson --reve ./reve-dump.nd
 ```
 
 `reconcile-dgt-reve.js` no reimplementa el matching — llama directamente a
-`experimental.enrichStationsExperimental` de la librería, con un `httpClient` falso que
-sirve el JSON de `reve-dump.ndjson` en vez de llamar a la red. El resultado es exactamente
-el mismo que produciría una ingesta real con esos mismos datos, así que sirve para auditar
-sin gastar peticiones ni depender de que el dataset en vivo no cambie entre pruebas.
+`enrichStations(stations, { source: 'public', acknowledgeUnsupported: true })` de la
+librería, con un `httpClient` falso que sirve el JSON de `reve-dump.ndjson` en vez de llamar
+a la red. El resultado es exactamente el mismo que produciría una ingesta real con esos
+mismos datos, así que sirve para auditar sin gastar peticiones ni depender de que el dataset
+en vivo no cambie entre pruebas.

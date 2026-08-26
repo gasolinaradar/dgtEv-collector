@@ -187,15 +187,20 @@ test('fetchAllLocations stops at maxPages even if the server claims more pages e
   assert.ok(warnings.some((w) => w.includes('maxPages')), 'should warn that the dataset is partial');
 });
 
-test('fetchAllLocations defaults to DEFAULT_MAX_PAGES without an explicit maxPages', async () => {
+test('DEFAULT_MAX_PAGES represents no real cap — the live total_pages is what stops a sweep', () => {
+  assert.ok(DEFAULT_MAX_PAGES > 100000);
+});
+
+test('fetchAllLocations walks every page the server reports without an explicit maxPages', async () => {
   let calls = 0;
+  const totalPages = 7;
   const fakeHttpClient = {
     post: async (url, data, config) => {
       calls += 1;
       const page = config.params.page;
       return {
         status: 200,
-        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: 99999, total_count: 999990 } },
+        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: totalPages, total_count: totalPages } },
       };
     },
   };
@@ -207,8 +212,8 @@ test('fetchAllLocations defaults to DEFAULT_MAX_PAGES without an explicit maxPag
   });
 
   const locations = await client.fetchAllLocations({ requestDelayMs: 0 });
-  assert.equal(calls, DEFAULT_MAX_PAGES, 'default cap must kick in without an explicit maxPages');
-  assert.equal(locations.length, DEFAULT_MAX_PAGES);
+  assert.equal(calls, totalPages, 'no default cap below the real total_pages');
+  assert.equal(locations.length, totalPages);
 });
 
 test('fetchLocationsSweep resumes from startPage and reports nextPage when capped', async () => {

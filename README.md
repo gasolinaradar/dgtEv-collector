@@ -264,14 +264,64 @@ const stations = await dgtEvCollector.fetch({
 ## Enrichment / Enriquecimiento
 
 The collector can enrich DGT stations with **real-time prices and availability** from
-[Red Eléctrica's Reve API](https://www.mapareve.es/). This requires a free API key
-(request at [mapareve.es/api-contacto](https://www.mapareve.es/api-contacto)).
+Red Eléctrica's Reve (mapareve.es). There are two underlying sources — `enrichStations()`
+picks one automatically, or you can force either:
 
 El collector puede enriquecer las estaciones DGT con **precios y disponibilidad en tiempo real**
-desde la [API Reve de Red Eléctrica](https://www.mapareve.es/). Requiere una API key gratuita
-(solicitar en [mapareve.es/api-contacto](https://www.mapareve.es/api-contacto)).
+de Reve (Red Eléctrica, mapareve.es). Hay dos fuentes distintas por debajo — `enrichStations()`
+elige una automáticamente, o puedes forzar cualquiera de las dos:
 
-### How it works / Cómo funciona
+| `source` | Endpoint | Auth | Selected when |
+| --- | --- | --- | --- |
+| `'external'` | `/api/external/v1` (documented, stable) | `reveApiKey` required | `reveApiKey` is set and `source` isn't `'public'` |
+| `'public'` | `/api/public/v1` (undocumented, reverse-engineered) | none, but `acknowledgeUnsupported: true` required | `reveApiKey` is absent, or `source: 'public'` is passed explicitly |
+
+```js
+const { enrichStations } = require('@gasolinaradar/dgt-ev-collector');
+
+// Uses /api/external/v1 (a key is present)
+await enrichStations(stations, { reveApiKey: process.env.REVE_API_KEY });
+
+// Uses /api/public/v1 (no key at all)
+await enrichStations(stations, { acknowledgeUnsupported: true });
+
+// Force /api/public/v1 even if a key happens to be set
+await enrichStations(stations, { source: 'public', acknowledgeUnsupported: true });
+```
+
+No `reveApiKey` and no explicit `source` at all (e.g. `enrichStations(stations, {})`) resolves
+to `'public'` by default — pass `acknowledgeUnsupported: true` or it throws. This is a
+deliberate change from versions before this section existed, where a missing `reveApiKey`
+silently no-op'd; force `source: 'external'` explicitly if you want that old no-op behavior
+back without a key.
+
+Sin `reveApiKey` y sin `source` explícito (p. ej. `enrichStations(stations, {})`) se resuelve
+a `'public'` por defecto — pasa `acknowledgeUnsupported: true` o lanza un error. Es un cambio
+deliberado respecto a versiones anteriores a esta sección, donde una `reveApiKey` ausente
+simplemente no hacía nada; fuerza `source: 'external'` explícitamente si quieres recuperar ese
+no-op de antes sin clave.
+
+Both fields produce the same output shape (`reveLocationId`, `operator`, `prices`,
+`availability`) — `source: 'public'` additionally sets **`reveData`**, the exact raw location
+object matched from `POST /locations` (evses/connectors/tariffs/owner, unprocessed), so a
+consuming API can render or persist the full Reve object directly, or look it up again later
+via `GET /api/public/v1/locations/{reveLocationId}`.
+
+Ambas rutas producen la misma forma de salida (`reveLocationId`, `operator`, `prices`,
+`availability`) — `source: 'public'` añade además **`reveData`**, el objeto crudo de la
+ubicación tal cual lo devuelve `POST /locations` (evses/conectores/tarifas/owner, sin
+procesar), para que una API propia pueda pintarlo o guardarlo directamente, o volver a
+consultarlo luego vía `GET /api/public/v1/locations/{reveLocationId}`.
+
+### `source: 'external'` — documented, stable, rate-limited
+
+Requires a free API key (request at
+[mapareve.es/api-contacto](https://www.mapareve.es/api-contacto)).
+
+Requiere una API key gratuita (solicitar en
+[mapareve.es/api-contacto](https://www.mapareve.es/api-contacto)).
+
+#### How it works / Cómo funciona
 
 1. Fetches Reve **locations first** (see Rate limit below for why), then operational status,
    then tariffs — all paginated, 100/page.
@@ -284,7 +334,7 @@ desde la [API Reve de Red Eléctrica](https://www.mapareve.es/). Requiere una AP
 5. Merges prices, availability, and operator data into the station object, resolving prices/
    availability from the full accumulated status/tariffs cache too (not just this call's fetch).
 
-### Rate limit / Límite de velocidad
+#### Rate limit / Límite de velocidad
 
 The Reve API allows **5 requests per hour**, shared across locations + status + tariffs in that
 order — **locations first**, always, because without a location there's nothing to match a DGT
@@ -302,92 +352,18 @@ The collector:
   attempt doesn't cause the next attempt to (incorrectly) ask Reve for only what changed since
   the failed attempt's timestamp.
 
-### Usage / Uso
+### `source: 'public'` — undocumented, no key, no rate limit
 
-```js
-const { fetchStations, streamStations, createDgtEvCollector } = require('@gasolinaradar/dgt-ev-collector');
-
-// With fetchStations
-const stations = await fetchStations({
-  enrich: {
-    reveApiKey: process.env.REVE_API_KEY,
-    cacheDir: './cache/reve',         // where to store Reve data on disk
-    thresholdMeters: 100,             // max distance to match (default: 50m)
-  },
-});
-
-// With streaming
-for await (const station of streamStations({
-  enrich: {
-    reveApiKey: process.env.REVE_API_KEY,
-    cacheDir: '/tmp/reve-cache',
-  },
-})) {
-  if (station.prices) {
-    console.log(`${station.name}: €${station.prices[0].price}/kWh`);
-  }
-  if (station.availability) {
-    console.log(`Status: ${station.availability.status}`);
-  }
-}
-
-// With collector contract
-const collector = createDgtEvCollector({
-  enrich: {
-    reveApiKey: process.env.REVE_API_KEY,
-    cacheDir: './cache/reve',
-  },
-});
-const stations = await collector.fetch(context);
-
-// Or enrich an existing array
-const enriched = await collector.enrich(existingStations, {
-  reveApiKey: process.env.REVE_API_KEY,
-  cacheDir: './cache/reve',
-});
-```
-
-### Enrich options / Opciones de enriquecimiento
-
-| Option             | Type      | Default | Description                                                                                                  |
-| ------------------ | --------- | ------- | -------------------------------------------------------------------------------------------------------------- |
-| `reveApiKey`       | `string`  | —       | **Required.** Reve API key from mapareve.es.                                                                 |
-| `cacheDir`         | `string`  | —       | Directory for Reve data cache files. Enables incremental refresh and cross-call accumulation.                 |
-| `thresholdMeters`  | `number`  | `50`    | Max distance (meters) to match a DGT station to a Reve location.                                             |
-| `onlyDynamicInfo`  | `boolean` | —       | When set, filters the locations fetch to only locations with dynamic (price/availability) data, saving requests on incremental refreshes. Leave unset on the first call to get the full location set. |
-
----
-
-## Experimental: undocumented public API / Experimental: API pública no documentada
-
-**EN:** `experimental.createRevePublicClient` and `experimental.enrichStationsExperimental`
-talk to `https://www.mapareve.es/api/public/v1` — the internal, unauthenticated API the
-mapareve.es map itself uses in the browser, reverse-engineered from its JS bundle (not the
-documented `/api/external/v1` used by the rest of this library). It needs **no API key**
-and no documented rate limit was observed, and it returns status and tariffs already
-embedded per location (one paginated call instead of three separate feeds).
+**EN:** Talks to `https://www.mapareve.es/api/public/v1` — the internal, unauthenticated API
+the mapareve.es map itself uses in the browser, reverse-engineered from its JS bundle. It
+needs **no API key** and no documented rate limit was observed, and it returns status and
+tariffs already embedded per location (one paginated call instead of three separate feeds).
 
 None of that makes it supported: it is not published by Red Eléctrica, can change or
 disappear without notice, and automated use outside a browser may fall outside the site's
-terms of use. It is kept **separate from the stable exports** for exactly that reason —
-use it to evaluate parity with `/api/external/v1`, not as a production dependency.
-
-```js
-const { experimental } = require('@gasolinaradar/dgt-ev-collector');
-
-const enriched = await experimental.enrichStationsExperimental(stations, {
-  acknowledgeUnsupported: true, // required — you're opting into an unsupported endpoint
-});
-```
-
-`acknowledgeUnsupported: true` is required by both `createRevePublicClient(...)` and
-`enrichStationsExperimental(stations, ...)` — omitting it throws. Output fields
-(`reveLocationId`, `operator`, `prices`, `availability`) match `enrichStations()` exactly,
-so it's a drop-in comparison for the same `stations` array — plus one addition not present
-on the documented path: **`reveData`**, the exact raw location object matched from
-`POST /locations` (evses/connectors/tariffs/owner, unprocessed), kept so a consuming API can
-render or persist the full Reve object directly, or look it up again later via
-`GET /api/public/v1/locations/{reveLocationId}`.
+terms of use. `acknowledgeUnsupported: true` is required whenever this source is used
+(whether by explicit `source: 'public'` or by the default fallback when no `reveApiKey` is
+given) — omitting it throws.
 
 **⚠️ Request volume — no caching, full sweep every call.** There is no on-disk cache or
 resumable cursor: every call walks every page of the dataset, from page 1 through the last
@@ -414,12 +390,17 @@ Only when there's no name match at all does it fall back to nearest-within-`thre
 The enrichment-complete log reports `matchedByName` vs `matchedByProximity` so you can see
 which one fired.
 
-**ES:** `experimental.createRevePublicClient` y `experimental.enrichStationsExperimental`
-hablan con `https://www.mapareve.es/api/public/v1` — la API interna y sin autenticación que
-usa el propio mapa de mapareve.es en el navegador, obtenida por ingeniería inversa de su
-bundle JS (no la `/api/external/v1` documentada que usa el resto de esta librería). No
-requiere API key, no se observó ningún límite de peticiones documentado, y devuelve el
-estado y las tarifas ya embebidos por emplazamiento en cada página.
+**ES:** Habla con `https://www.mapareve.es/api/public/v1` — la API interna y sin
+autenticación que usa el propio mapa de mapareve.es en el navegador, obtenida por ingeniería
+inversa de su bundle JS. No requiere API key, no se observó ningún límite de peticiones
+documentado, y devuelve el estado y las tarifas ya embebidos por emplazamiento en cada
+página.
+
+Nada de eso la hace soportada: no está publicada por Red Eléctrica, puede cambiar o
+desaparecer sin aviso, y su uso automatizado fuera del navegador puede quedar fuera de los
+términos de uso del sitio. `acknowledgeUnsupported: true` es obligatorio siempre que se use
+esta fuente (por `source: 'public'` explícito o por el fallback por defecto sin
+`reveApiKey`) — omitirlo lanza un error.
 
 **⚠️ Volumen de peticiones — sin caché, barrido completo en cada llamada.** No hay caché en
 disco ni cursor reanudable: cada llamada recorre todas las páginas del dataset, de la 1 a la
@@ -447,20 +428,66 @@ más cercana de esas. Solo si no hay ningún nombre coincidente cae al comportam
 (más cercana dentro de `thresholdMeters`). El log de fin de enriquecimiento reporta
 `matchedByName` vs `matchedByProximity` para que veas cuál se disparó.
 
-Nada de eso la hace soportada: no está publicada por Red Eléctrica, puede cambiar o
-desaparecer sin aviso, y su uso automatizado fuera del navegador puede quedar fuera de los
-términos de uso del sitio. Se mantiene **separada de los exports estables** precisamente
-por eso — úsala para evaluar la paridad con `/api/external/v1`, no como dependencia de
-producción.
+### Usage / Uso
 
-`acknowledgeUnsupported: true` es obligatorio tanto en `createRevePublicClient(...)` como en
-`enrichStationsExperimental(stations, ...)` — omitirlo lanza un error. Los campos de salida
-(`reveLocationId`, `operator`, `prices`, `availability`) coinciden exactamente con los de
-`enrichStations()`, así que es una comparación directa para el mismo array `stations` — más
-un campo adicional que no existe en la vía documentada: **`reveData`**, el objeto crudo de
-la ubicación tal cual lo devuelve `POST /locations` (evses/conectores/tarifas/owner, sin
-procesar), para que una API propia pueda pintarlo o guardarlo directamente, o volver a
-consultarlo luego vía `GET /api/public/v1/locations/{reveLocationId}`.
+```js
+const { fetchStations, streamStations, createDgtEvCollector } = require('@gasolinaradar/dgt-ev-collector');
+
+// External source (a key is present)
+const stations = await fetchStations({
+  enrich: {
+    reveApiKey: process.env.REVE_API_KEY,
+    cacheDir: './cache/reve',         // where to store Reve data on disk
+    thresholdMeters: 100,             // max distance to match (default: 50m)
+  },
+});
+
+// Public source (no key — pass acknowledgeUnsupported instead)
+const stationsPublic = await fetchStations({
+  enrich: {
+    acknowledgeUnsupported: true,
+    maxPages: 50,                    // cap a single run instead of a full ~582-request sweep
+  },
+});
+
+// With streaming
+for await (const station of streamStations({
+  enrich: { reveApiKey: process.env.REVE_API_KEY, cacheDir: '/tmp/reve-cache' },
+})) {
+  if (station.prices) {
+    console.log(`${station.name}: €${station.prices[0].price}/kWh`);
+  }
+  if (station.availability) {
+    console.log(`Status: ${station.availability.status}`);
+  }
+}
+
+// With collector contract
+const collector = createDgtEvCollector({
+  enrich: { reveApiKey: process.env.REVE_API_KEY, cacheDir: './cache/reve' },
+});
+const stations2 = await collector.fetch(context);
+
+// Or enrich an existing array
+const enriched = await collector.enrich(existingStations, {
+  reveApiKey: process.env.REVE_API_KEY,
+  cacheDir: './cache/reve',
+});
+```
+
+### Enrich options / Opciones de enriquecimiento
+
+| Option | Type | Default | Applies to | Description |
+| --- | --- | --- | --- | --- |
+| `source` | `'external' \| 'public'` | auto (`'external'` if `reveApiKey` set, else `'public'`) | both | Forces which Reve source to use. |
+| `reveApiKey` | `string` | — | external | Reve API key from mapareve.es. Required for `source: 'external'`. |
+| `acknowledgeUnsupported` | `boolean` | — | public | **Required** for `source: 'public'` — confirms you understand it's undocumented. |
+| `cacheDir` | `string` | — | external | Directory for Reve data cache files. Enables incremental refresh and cross-call accumulation. Not used by `public` (no caching there). |
+| `thresholdMeters` | `number` | `50` | both | Max distance (meters) to match a DGT station to a Reve location (proximity fallback only, for `public`). |
+| `onlyDynamicInfo` | `boolean` | — | external | When set, filters the locations fetch to only locations with dynamic (price/availability) data, saving requests on incremental refreshes. |
+| `maxPages` | `number` | no real cap | public | Caps how many pages a single call fetches. Defaults to walking the entire dataset (~582 pages today). |
+| `perPage` | `number` | `25` | public | Confirmed max accepted by `POST /locations`; higher values 400. |
+| `filters` | `object` | `{}` | public | Extra `POST /locations` body fields (bbox override, `cpo_ids`, `power_min`, `connector_types`, ...). |
 
 ---
 
@@ -497,9 +524,9 @@ Este proyecto **no está afiliado** al Estado español ni a la DGT. Los datos pe
 ## Tests
 
 ```bash
-npm test                 # unit tests (mocked HTTP) — includes the experimental client/enrichment
+npm test                 # unit tests (mocked HTTP) — includes the public-source client/enrichment
 npm run test:live        # live: real DGT dataset
-npm run test:live-public # live: real /api/public/v1 (experimental), no key needed (~5 requests)
+npm run test:live-public # live: real /api/public/v1, no key needed (~5 requests)
 REVE_API_KEY=xxx npm run test:live-compare  # live: side-by-side vs /api/external/v1 (spends 1 of its 5 req/h)
 ```
 

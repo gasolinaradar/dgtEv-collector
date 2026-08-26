@@ -1,12 +1,12 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const {
-  enrichStationsExperimental,
+  enrichStationsPublic,
   normalizeRevePublicLocation,
   normalizeStationName,
   mergePublicPrices,
   mergePublicAvailability,
-} = require('../src/enrich-experimental');
+} = require('../src/enrich-public');
 
 const silentLogger = { info: () => {}, warn: () => {}, debug: () => {} };
 
@@ -94,14 +94,14 @@ test('mergePublicAvailability returns undefined when there are no EVSE statuses'
   assert.equal(mergePublicAvailability(reveLoc), undefined);
 });
 
-test('enrichStationsExperimental throws when acknowledgeUnsupported is missing', async () => {
+test('enrichStationsPublic throws when acknowledgeUnsupported is missing', async () => {
   await assert.rejects(
-    () => enrichStationsExperimental([], {}),
+    () => enrichStationsPublic([], {}),
     /acknowledgeUnsupported/,
   );
 });
 
-test('enrichStationsExperimental matches DGT stations to Reve public locations by proximity', async () => {
+test('enrichStationsPublic matches DGT stations to Reve public locations by proximity', async () => {
   const stations = [
     {
       sourceStationId: 'dgt-1',
@@ -124,7 +124,7 @@ test('enrichStationsExperimental matches DGT stations to Reve public locations b
     },
   };
 
-  const result = await enrichStationsExperimental(stations, {
+  const result = await enrichStationsPublic(stations, {
     acknowledgeUnsupported: true,
     httpClient: fakeHttpClient,
     logger: silentLogger,
@@ -145,7 +145,7 @@ test('enrichStationsExperimental matches DGT stations to Reve public locations b
   assert.deepEqual(result[0].reveData, samplePublicLocation());
 });
 
-test('enrichStationsExperimental leaves stations untouched when nothing matches nearby', async () => {
+test('enrichStationsPublic leaves stations untouched when nothing matches nearby', async () => {
   const stations = [
     {
       sourceStationId: 'dgt-far',
@@ -166,7 +166,7 @@ test('enrichStationsExperimental leaves stations untouched when nothing matches 
     },
   };
 
-  const result = await enrichStationsExperimental(stations, {
+  const result = await enrichStationsPublic(stations, {
     acknowledgeUnsupported: true,
     httpClient: fakeHttpClient,
     logger: silentLogger,
@@ -177,7 +177,7 @@ test('enrichStationsExperimental leaves stations untouched when nothing matches 
   assert.equal(result[0].prices, undefined);
 });
 
-test('enrichStationsExperimental walks every page of the dataset by default (no cap, no cache)', async () => {
+test('enrichStationsPublic walks every page of the dataset by default (no cap, no cache)', async () => {
   // 3 total pages of 1 location each — with no maxPages passed, all 3 must be fetched.
   const pages = {
     1: samplePublicLocation({ id: 'reve-pub-1', coordinates: { latitude: '40.0', longitude: '-3.0' } }),
@@ -201,7 +201,7 @@ test('enrichStationsExperimental walks every page of the dataset by default (no 
     { sourceStationId: 'dgt-1', location: { type: 'Point', coordinates: [-5.0, 42.0] }, prices: undefined, availability: undefined },
   ];
 
-  const enriched = await enrichStationsExperimental(stations, {
+  const enriched = await enrichStationsPublic(stations, {
     acknowledgeUnsupported: true,
     httpClient: fakeHttpClient,
     logger: silentLogger,
@@ -212,7 +212,7 @@ test('enrichStationsExperimental walks every page of the dataset by default (no 
   assert.equal(enriched[0].reveLocationId, 'reve-pub-3');
 });
 
-test('enrichStationsExperimental always restarts at page 1 (no cache/cursor between calls)', async () => {
+test('enrichStationsPublic always restarts at page 1 (no cache/cursor between calls)', async () => {
   const capturedPages = [];
   const fakeHttpClient = {
     post: async (url, data, config) => {
@@ -225,13 +225,13 @@ test('enrichStationsExperimental always restarts at page 1 (no cache/cursor betw
   };
 
   const opts = { acknowledgeUnsupported: true, httpClient: fakeHttpClient, logger: silentLogger };
-  await enrichStationsExperimental([], opts);
-  await enrichStationsExperimental([], opts);
+  await enrichStationsPublic([], opts);
+  await enrichStationsPublic([], opts);
 
   assert.deepEqual(capturedPages, [1, 1], 'every call starts at page 1 — no persisted cursor');
 });
 
-test('enrichStationsExperimental skips a page that fails after retries instead of losing the whole run', async () => {
+test('enrichStationsPublic skips a page that fails after retries instead of losing the whole run', async () => {
   const pages = {
     1: samplePublicLocation({ id: 'reve-pub-1', coordinates: { latitude: '40.0', longitude: '-3.0' } }),
     // page 2 always fails (simulates a transient server error that outlasts request-level retries)
@@ -258,7 +258,7 @@ test('enrichStationsExperimental skips a page that fails after retries instead o
     { sourceStationId: 'dgt-2', location: { type: 'Point', coordinates: [-3.0, 40.0] }, prices: undefined, availability: undefined },
   ];
 
-  const enriched = await enrichStationsExperimental(stations, {
+  const enriched = await enrichStationsPublic(stations, {
     acknowledgeUnsupported: true,
     httpClient: fakeHttpClient,
     logger: silentLogger,
@@ -277,7 +277,7 @@ test('normalizeStationName is accent/case insensitive', () => {
   assert.equal(normalizeStationName('   '), null);
 });
 
-test('enrichStationsExperimental matches by exact name even when far outside thresholdMeters', async () => {
+test('enrichStationsPublic matches by exact name even when far outside thresholdMeters', async () => {
   // Reve location is 400km from the DGT station's coordinates — proximity alone would
   // never match, but the names are identical (after normalization).
   const reveLoc = samplePublicLocation({ id: 'reve-far', name: 'Repsol, Elorrio, Vía Pública' });
@@ -298,7 +298,7 @@ test('enrichStationsExperimental matches by exact name even when far outside thr
     },
   ];
 
-  const result = await enrichStationsExperimental(stations, {
+  const result = await enrichStationsPublic(stations, {
     acknowledgeUnsupported: true,
     httpClient: fakeHttpClient,
     logger: silentLogger,
@@ -308,7 +308,7 @@ test('enrichStationsExperimental matches by exact name even when far outside thr
   assert.equal(result[0].reveLocationId, 'reve-far');
 });
 
-test('enrichStationsExperimental disambiguates same-named Reve locations by nearest', async () => {
+test('enrichStationsPublic disambiguates same-named Reve locations by nearest', async () => {
   const near = samplePublicLocation({
     id: 'reve-near',
     name: 'Repsol',
@@ -337,7 +337,7 @@ test('enrichStationsExperimental disambiguates same-named Reve locations by near
     },
   ];
 
-  const result = await enrichStationsExperimental(stations, {
+  const result = await enrichStationsPublic(stations, {
     acknowledgeUnsupported: true,
     httpClient: fakeHttpClient,
     logger: silentLogger,
@@ -346,7 +346,7 @@ test('enrichStationsExperimental disambiguates same-named Reve locations by near
   assert.equal(result[0].reveLocationId, 'reve-near', 'ambiguous name match should resolve to the nearest candidate');
 });
 
-test('enrichStationsExperimental falls back to proximity when there is no name match', async () => {
+test('enrichStationsPublic falls back to proximity when there is no name match', async () => {
   const reveLoc = samplePublicLocation({ id: 'reve-prox-only', name: 'Totally Different Name' });
   const fakeHttpClient = {
     post: async (url, data, config) => ({
@@ -365,7 +365,7 @@ test('enrichStationsExperimental falls back to proximity when there is no name m
     },
   ];
 
-  const result = await enrichStationsExperimental(stations, {
+  const result = await enrichStationsPublic(stations, {
     acknowledgeUnsupported: true,
     httpClient: fakeHttpClient,
     logger: silentLogger,

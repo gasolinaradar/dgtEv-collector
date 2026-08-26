@@ -6,7 +6,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { createRevePublicClient } = require('../src/reve-public');
-const { normalizeRevePublicLocation, mergePublicAvailability } = require('../src/enrich-experimental');
+const { normalizeRevePublicLocation, mergePublicAvailability } = require('../src/enrich-public');
 
 const silentLogger = { info: () => {}, warn: () => {}, debug: () => {} };
 

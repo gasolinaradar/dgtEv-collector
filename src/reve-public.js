@@ -5,7 +5,7 @@ const DEFAULT_TIMEOUT = 30000;
 const DEFAULT_RETRIES = 3;
 const DEFAULT_PAGE_SIZE = 25;
 const SPAIN_BBOX = { latitude_ne: 44, longitude_ne: 4.5, latitude_sw: 27, longitude_sw: -18.5 };
-const DEFAULT_MAX_PAGES = 50;
+const DEFAULT_MAX_PAGES = Number.MAX_SAFE_INTEGER;
 const DEFAULT_REQUEST_DELAY_MS = 150;
 
 function resolveHttpClient(httpClientOption) {

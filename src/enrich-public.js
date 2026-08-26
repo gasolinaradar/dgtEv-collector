@@ -1,4 +1,4 @@
-const { createRevePublicClient } = require('./reve-public');
+const { createRevePublicClient, DEFAULT_MAX_PAGES } = require('./reve-public');
 const { SpatialIndex, STATUS_PRIORITY, DEFAULT_THRESHOLD_METERS, haversineMeters } = require('./enrich');
 
 function normalizeStationName(name) {
@@ -94,9 +94,7 @@ function mergePublicAvailability(reveLoc) {
   return { status: 'UNKNOWN', evseCount: statuses.length, lastUpdated: new Date().toISOString() };
 }
 
-const FULL_SWEEP_MAX_PAGES = 100000;
-
-async function enrichStationsExperimental(stations, options = {}) {
+async function enrichStationsPublic(stations, options = {}) {
   const {
     thresholdMeters = DEFAULT_THRESHOLD_METERS,
     httpClient,
@@ -104,7 +102,7 @@ async function enrichStationsExperimental(stations, options = {}) {
     acknowledgeUnsupported,
     filters = {},
     perPage = 25,
-    maxPages = FULL_SWEEP_MAX_PAGES,
+    maxPages = DEFAULT_MAX_PAGES,
   } = options;
 
   const reveClient = createRevePublicClient({ httpClient, logger, acknowledgeUnsupported });
@@ -205,7 +203,7 @@ async function enrichStationsExperimental(stations, options = {}) {
     });
   }
 
-  logger.info('Experimental public-API enrichment complete', {
+  logger.info('Reve public-API enrichment complete', {
     totalStations: stations.length,
     matched,
     matchedByName,
@@ -218,7 +216,7 @@ async function enrichStationsExperimental(stations, options = {}) {
 }
 
 module.exports = {
-  enrichStationsExperimental,
+  enrichStationsPublic,
   normalizeRevePublicLocation,
   normalizeStationName,
   mergePublicPrices,

@@ -12,7 +12,7 @@ const assert = require('node:assert');
 const { createReveClient } = require('../src/reve');
 const { createRevePublicClient } = require('../src/reve-public');
 const { normalizeReveLocation } = require('../src/enrich');
-const { normalizeRevePublicLocation } = require('../src/enrich-experimental');
+const { normalizeRevePublicLocation } = require('../src/enrich-public');
 
 const silentLogger = { info: () => {}, warn: () => {}, debug: () => {} };
 const hasKey = Boolean(process.env.REVE_API_KEY);

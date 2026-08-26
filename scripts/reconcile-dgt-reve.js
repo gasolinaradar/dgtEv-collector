@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
-const { experimental } = require('../src');
+const { enrichStations } = require('../src');
 
 function parseArgs(argv) {
   const args = {
@@ -65,7 +65,8 @@ async function main() {
 
   const httpClient = createLocalReveHttpClient(reveLocations);
 
-  const enriched = await experimental.enrichStationsExperimental(stations, {
+  const enriched = await enrichStations(stations, {
+    source: 'public',
     acknowledgeUnsupported: true,
     httpClient,
     logger: console,
