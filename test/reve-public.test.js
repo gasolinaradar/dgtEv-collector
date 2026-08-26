@@ -380,3 +380,117 @@ test('does not retry on HTTP 403 (WAF block)', async () => {
   await assert.rejects(() => client.fetchLocation('loc-1'));
   assert.equal(attempts, 1);
 });
+
+test('does not retry on HTTP 400 (bad request — retrying it won\'t change the outcome)', async () => {
+  let attempts = 0;
+  const fakeHttpClient = {
+    get: async () => {
+      attempts += 1;
+      const err = new Error('Bad Request');
+      err.response = { status: 400, data: { status_message: 'per_page no tiene un valor válido' } };
+      throw err;
+    },
+  };
+
+  const client = createRevePublicClient({ acknowledgeUnsupported: true, httpClient: fakeHttpClient, logger: silentLogger });
+
+  await assert.rejects(() => client.fetchLocation('loc-1'));
+  assert.equal(attempts, 1);
+});
+
+test('retries on a timeout / network error (no error.response at all)', async () => {
+  let attempts = 0;
+  const fakeHttpClient = {
+    get: async () => {
+      attempts += 1;
+      if (attempts <= 2) {
+        const err = new Error('timeout of 30000ms exceeded');
+        err.code = 'ECONNABORTED';
+        throw err; // no err.response — this is what axios timeouts/network errors look like
+      }
+      return { status: 200, data: { id: 'loc-1' } };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    retries: 3,
+  });
+
+  const loc = await client.fetchLocation('loc-1');
+  assert.equal(loc.id, 'loc-1');
+  assert.equal(attempts, 3);
+});
+
+test('retries on HTTP 5xx (transient server error)', async () => {
+  let attempts = 0;
+  const fakeHttpClient = {
+    get: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const err = new Error('Bad Gateway');
+        err.response = { status: 502 };
+        throw err;
+      }
+      return { status: 200, data: { id: 'loc-1' } };
+    },
+  };
+
+  const client = createRevePublicClient({ acknowledgeUnsupported: true, httpClient: fakeHttpClient, logger: silentLogger });
+
+  const loc = await client.fetchLocation('loc-1');
+  assert.equal(loc.id, 'loc-1');
+  assert.equal(attempts, 2);
+});
+
+test('fetchAllLocations skips a page that fails after retries instead of aborting the whole fetch', async () => {
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      if (page === 2) {
+        const err = new Error('Internal Server Error');
+        err.response = { status: 500 };
+        throw err;
+      }
+      const items = page <= 3 ? [{ id: `loc-${page}` }] : [];
+      return { status: 200, data: { data: items, pagination: { page, per_page: 1, total_pages: 3, total_count: 3 } } };
+    },
+  };
+
+  const warnings = [];
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: { ...silentLogger, warn: (msg) => warnings.push(msg) },
+    retries: 0, // fail page 2 immediately, no backoff wait, to keep the test fast
+  });
+
+  const locations = await client.fetchAllLocations({ requestDelayMs: 0 });
+  assert.deepEqual(locations.map((l) => l.id), ['loc-1', 'loc-3'], 'page 2 is skipped, pages 1 and 3 still come through');
+  assert.ok(warnings.some((w) => w.includes('page 2') && w.includes('skipping')));
+});
+
+test('fetchAllLocations stops early after too many consecutive page failures', async () => {
+  let calls = 0;
+  const fakeHttpClient = {
+    post: async () => {
+      calls += 1;
+      const err = new Error('Internal Server Error');
+      err.response = { status: 500 };
+      throw err;
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    retries: 0,
+  });
+
+  const locations = await client.fetchAllLocations({ requestDelayMs: 0, maxConsecutivePageFailures: 3, maxPages: 1000 });
+  assert.deepEqual(locations, []);
+  assert.equal(calls, 3, 'stops after 3 consecutive page failures instead of trying maxPages times');
+});

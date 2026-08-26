@@ -333,11 +333,10 @@ En este orden, de más probable a menos probable:
    precio "único" incorrecto.
 3. **¿El `stepSize` te está despistando?** No asumas que el precio es "por kWh" solo porque
    `type: "ENERGY"` — revisa `stepSize` para la unidad real de facturación.
-4. **¿Es una ubicación de una vuelta antigua del sweep?** Si el backend usa `cacheDir`, esa
-   ubicación pudo haberse traído hace hasta ~12h con `maxPages: 50` (ver README, sección
-   "sweep incremental") — el precio en `mapareve.es` puede haber cambiado desde entonces.
-   Compara la hora de tu petición Postman (dato fresco) contra cuándo se ejecutó el último
-   sweep.
+4. **¿Cuándo se ejecutó la ingesta?** Ya no hay caché entre llamadas — cada ejecución barre
+   el dataset entero desde cero, así que el dato debería ser fresco de esa misma ejecución.
+   Compara igualmente la hora de tu petición Postman contra la hora del log de esa ingesta,
+   por si el precio cambió en `mapareve.es` justo entre medias.
 5. **¿IVA incluido o no?** Sin confirmar (punto 5 de la sección 5) — compara el número crudo
    `price` + `vat` contra lo que muestra la web de Reve para esa misma ubicación y decide tú
    si hace falta ajustar el cálculo.

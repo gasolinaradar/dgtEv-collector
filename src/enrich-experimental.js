@@ -9,11 +9,15 @@
 // inside each location's evses/connectors, so this needs only one paginated call
 // (POST /locations) instead of three separate feeds (locations + operational_status +
 // tariffs) — at the cost of relying on an endpoint nobody guarantees will keep working.
+//
+// No persistence: every call walks every page of the dataset from page 1 through the last
+// one, fresh, every time — no on-disk cache/cursor across calls. That's ~582 requests per
+// full run at per_page=25 (see reve-public.js), so resilience matters more here than usual:
+// request()-level retries handle transient failures per page, and streamLocationPages skips
+// (rather than aborts on) an individual page that still fails after retries, so one bad page
+// doesn't throw away every other page already fetched in that run.
 
-const fs = require('node:fs');
-const path = require('node:path');
 const { createRevePublicClient } = require('./reve-public');
-const { readJson, writeJson } = require('./cache');
 const { SpatialIndex, STATUS_PRIORITY, DEFAULT_THRESHOLD_METERS, haversineMeters } = require('./enrich');
 
 // Strips accents/case so "Repsol, Elorrio" and "REPSOL, ELORRIO" (or minor encoding
@@ -111,24 +115,10 @@ function mergePublicAvailability(reveLoc) {
   return { status: 'UNKNOWN', evseCount: statuses.length, lastUpdated: new Date().toISOString() };
 }
 
-function sweepFilePath(cacheDir) {
-  return path.join(cacheDir, 'reve_public_sweep.json');
-}
-
-function loadSweepState(cacheDir) {
-  if (!cacheDir) return { nextPage: 1, locations: {} };
-  const state = readJson(sweepFilePath(cacheDir));
-  return {
-    nextPage: typeof state?.nextPage === 'number' && state.nextPage > 0 ? state.nextPage : 1,
-    locations: state?.locations && typeof state.locations === 'object' ? state.locations : {},
-  };
-}
-
-function saveSweepState(cacheDir, state) {
-  if (!cacheDir) return;
-  if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
-  writeJson(sweepFilePath(cacheDir), { ...state, updatedAt: new Date().toISOString() });
-}
+// Effectively "no cap" — a full sweep is ~582 pages today (see reve-public.js), so this
+// just needs to be comfortably above that. Pass options.maxPages yourself to cap a run
+// instead (e.g. while testing), but the default here is "walk the whole dataset."
+const FULL_SWEEP_MAX_PAGES = 100000;
 
 async function enrichStationsExperimental(stations, options = {}) {
   const {
@@ -139,29 +129,19 @@ async function enrichStationsExperimental(stations, options = {}) {
     filters = {},
     // See reve-public.js: 25 is the confirmed max per_page POST /locations accepts.
     perPage = 25,
-    // See reve-public.js DEFAULT_MAX_PAGES: nationwide coverage is ~582 pages at
-    // per_page=25. Left undefined here so reve-public.js's conservative default (50
-    // pages / 1,250 locations) applies unless the caller deliberately raises it — do NOT
-    // default this to "cover all of Spain" on a schedule without reading that comment.
-    maxPages,
-    // Directory to persist pagination progress + accumulated locations across calls. With
-    // this set, each call fetches at most `maxPages` pages starting where the previous call
-    // left off (instead of always restarting at page 1), so coverage grows call over call —
-    // e.g. one hourly cron run covers pages 1-50, the next 51-100, and so on, wrapping back
-    // to page 1 once a full sweep completes (Reve's data changes over time, so it's worth
-    // re-walking periodically). Without cacheDir, behavior is unchanged from before: always
-    // starts at page 1, only this call's fetch is used (no accumulation between calls).
-    cacheDir,
+    // Defaults to walking every page of the dataset (~582 requests today) every single
+    // call — no persistence, no partial coverage across runs. Pass a smaller value
+    // yourself if you deliberately want to cap a single run.
+    maxPages = FULL_SWEEP_MAX_PAGES,
   } = options;
 
   const reveClient = createRevePublicClient({ httpClient, logger, acknowledgeUnsupported });
 
-  const prevState = loadSweepState(cacheDir);
-  const accumulated = prevState.locations;
+  logger.info('Requesting Reve public locations sweep', { maxPages, perPage });
 
-  let sweepResult;
+  let locations;
   try {
-    sweepResult = await reveClient.fetchLocationsSweep({ filters, perPage, maxPages, startPage: prevState.nextPage });
+    locations = await reveClient.fetchAllLocations({ filters, perPage, maxPages });
   } catch (error) {
     logger.warn('Failed to fetch Reve public locations for matching', {
       error: error.message,
@@ -171,23 +151,13 @@ async function enrichStationsExperimental(stations, options = {}) {
     return stations;
   }
 
-  for (const loc of sweepResult.locations) {
+  const normalizedReve = [];
+  for (const loc of locations) {
     const n = normalizeRevePublicLocation(loc);
-    if (n) accumulated[n.reveLocationId] = n;
+    if (n) normalizedReve.push(n);
   }
 
-  saveSweepState(cacheDir, { nextPage: sweepResult.nextPage, locations: accumulated });
-
-  logger.info('Reve public locations sweep progress', {
-    fetchedThisRun: sweepResult.locations.length,
-    accumulatedTotal: Object.keys(accumulated).length,
-    nextPage: sweepResult.nextPage,
-    totalPages: sweepResult.totalPages,
-    completedSweep: sweepResult.completedSweep,
-    persisted: Boolean(cacheDir),
-  });
-
-  const normalizedReve = Object.values(accumulated);
+  logger.info('Reve public locations sweep complete', { fetched: locations.length, normalized: normalizedReve.length });
 
   logger.info('Building spatial index for Reve public locations', { count: normalizedReve.length });
   const index = new SpatialIndex();

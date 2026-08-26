@@ -18,7 +18,7 @@ const axios = require('axios');
 
 const REVE_PUBLIC_BASE_URL = 'https://www.mapareve.es/api/public/v1';
 const DEFAULT_TIMEOUT = 30000;
-const DEFAULT_RETRIES = 2;
+const DEFAULT_RETRIES = 3;
 // Confirmed live (2026-08-26): POST /locations returns 400 "per_page no tiene un valor
 // válido" above 25 — tested 10/15/20/25 (all 200) vs 30/50/100 (all 400), so the real
 // constraint is a max of 25, not a fixed value. Not documented anywhere, and the frontend
@@ -74,11 +74,20 @@ async function request(httpClient, method, endpoint, { params, data } = {}, opts
       return response.data;
     } catch (error) {
       const status = error?.response?.status;
-      // Only 429 is retried. A 403 here most likely means the Incapsula WAF challenged
-      // the request — retrying/evading that automatically is out of scope for this client.
-      if (status === 429 && attempt < retries) {
+      // Retry transient failures: no response at all (timeout, DNS failure, connection
+      // reset — axios/network errors never set error.response), HTTP 429, or 5xx. Never
+      // retry a definitive rejection: 400 (bad request — won't fix itself), 403 (most
+      // likely the Incapsula WAF — retrying/evading that automatically is out of scope
+      // for this client), or any other 4xx.
+      const isRetryable = !error.response || status === 429 || (status >= 500 && status < 600);
+      if (isRetryable && attempt < retries) {
         attempt += 1;
-        logger.warn(`Reve public API 429 on attempt ${attempt}, waiting ${delay / 1000}s`);
+        const reason = status ? `HTTP ${status}` : error.code || 'network error';
+        logger.warn(`Reve public API request failed (${reason}), retry ${attempt}/${retries} in ${delay / 1000}s`, {
+          endpoint,
+          status,
+          message: error.message,
+        });
         await sleep(delay);
         delay *= 2;
         continue;
@@ -106,12 +115,20 @@ async function* streamLocationPages(httpClient, opts = {}) {
     maxPages = DEFAULT_MAX_PAGES,
     startPage = 1,
     logger = console,
+    // A single page failing after its own request-level retries (see request() above)
+    // doesn't abort the whole sweep — it's skipped and the next page is tried, so one bad
+    // page doesn't throw away every other page already fetched in this call. This many
+    // page failures *in a row* means something is systemically broken (WAF, outage), not a
+    // transient blip, so the sweep stops instead of looping through the rest of the
+    // dataset blind.
+    maxConsecutivePageFailures = 3,
     ...rest
   } = opts;
 
   let page = startPage;
   let totalPages = null;
   let pagesFetched = 0;
+  let consecutiveFailures = 0;
 
   for (;;) {
     if (totalPages !== null && page > totalPages) break;
@@ -124,13 +141,39 @@ async function* streamLocationPages(httpClient, opts = {}) {
     }
     if (pagesFetched > 0) await sleep(requestDelayMs);
 
-    const body = await request(
-      httpClient,
-      'post',
-      '/locations',
-      { data: { ...SPAIN_BBOX, ...filters }, params: { page, per_page: perPage } },
-      { logger, ...rest },
-    );
+    logger.info(`Requesting Reve public locations page ${page}`, { page, perPage });
+    const requestStart = Date.now();
+
+    let body;
+    try {
+      body = await request(
+        httpClient,
+        'post',
+        '/locations',
+        { data: { ...SPAIN_BBOX, ...filters }, params: { page, per_page: perPage } },
+        { logger, ...rest },
+      );
+    } catch (error) {
+      consecutiveFailures += 1;
+      logger.warn(`Failed to fetch Reve public locations page ${page} after retries — skipping it`, {
+        page,
+        consecutiveFailures,
+        error: error.message,
+        status: error.response?.status,
+        responseBody: error.response?.data,
+      });
+      if (consecutiveFailures >= maxConsecutivePageFailures) {
+        logger.warn(
+          `Reve public API: ${consecutiveFailures} consecutive page failures — stopping sweep early`,
+          { lastAttemptedPage: page },
+        );
+        break;
+      }
+      page += 1;
+      continue;
+    }
+    consecutiveFailures = 0;
+
     const { data, pagination } = unwrapPaginated(body);
     pagesFetched += 1;
 
@@ -139,6 +182,14 @@ async function* streamLocationPages(httpClient, opts = {}) {
     } else if (data.length < perPage) {
       totalPages = page;
     }
+
+    logger.info(`Received Reve public locations page ${page}`, {
+      page,
+      count: data.length,
+      ms: Date.now() - requestStart,
+      totalPages,
+      totalCount: pagination?.total_count,
+    });
 
     if (data.length === 0) break;
     yield { data, page, totalPages };

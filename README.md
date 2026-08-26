@@ -377,7 +377,6 @@ const { experimental } = require('@gasolinaradar/dgt-ev-collector');
 
 const enriched = await experimental.enrichStationsExperimental(stations, {
   acknowledgeUnsupported: true, // required — you're opting into an unsupported endpoint
-  maxPages: 50,                 // see warning below before raising this
 });
 ```
 
@@ -386,40 +385,30 @@ const enriched = await experimental.enrichStationsExperimental(stations, {
 (`reveLocationId`, `operator`, `prices`, `availability`) match `enrichStations()` exactly,
 so it's a drop-in comparison for the same `stations` array.
 
-**⚠️ Request volume — read before running this on a schedule.** `POST /locations` caps
-`per_page` at **25** (confirmed live — 10/15/20/25 all work, 30/50/100 all 400) and requires
-a bounding box (defaults to all of Spain if you don't pass one via `filters`). Covering the
-whole country is therefore **~582 sequential requests** (~14,550 locations ÷ 25), not "a
-couple of calls". `maxPages` defaults to **50** (1,250 locations, at `per_page: 25`) for
-exactly this reason — raising it to cover all of Spain means committing to ~582 requests
-against an endpoint with no documented rate limit or SLA, on every run. If this runs on a
-cron, size `maxPages` (or scope `filters` to a region/CPO) deliberately; don't default to
-"fetch everything."
+**⚠️ Request volume — no caching, full sweep every call.** There is no on-disk cache or
+resumable cursor: every call walks every page of the dataset, from page 1 through the last
+one, fresh. `POST /locations` caps `per_page` at **25** (confirmed live — 10/15/20/25 all
+work, 30/50/100 all 400) and requires a bounding box (defaults to all of Spain if you don't
+pass one via `filters`), so a full run is **~582 sequential requests** (~14,550 locations ÷
+25) against an endpoint with no documented rate limit or SLA — **every single time**,
+including on every cron tick if this runs on a schedule. Pass `maxPages` yourself to cap a
+single run (e.g. while testing) if you don't want that.
 
-**Covering more than `maxPages` over time: pass `cacheDir`.** Without it, every call starts
-back at page 1 and only that call's fetch is used — coverage never grows. With `cacheDir`
-set, each call picks up at the page the previous call stopped on (persisted to
-`<cacheDir>/reve_public_sweep.json`) and merges newly-fetched locations into what's already
-accumulated there, so an hourly cron with `maxPages: 50` covers pages 1-50 on the first run,
-51-100 on the next, and so on — full national coverage in ~12 runs (~12 hours at 50
-pages/run, 1,250 locations/run) instead of one 582-request burst. Once a sweep completes,
-the cursor wraps back to page 1 to pick up changes (status, tariffs, new sites) in Reve's
-data.
+**Resilience**: a single page failing (timeout, network error, HTTP 429/5xx) is retried
+with exponential backoff (`retries`, default 3) before giving up on *that page only* — it
+doesn't abort the run, so one bad page doesn't throw away every other page already fetched.
+If `maxConsecutivePageFailures` pages in a row fail even after their own retries (default
+3), the sweep stops early instead of grinding through the rest of the dataset blind — that
+many failures in a row means something systemic (the WAF, an outage), not a blip. HTTP 400
+(bad request) and 403 (most likely the Incapsula WAF) are never retried — a 400 won't fix
+itself, and retrying/evading a WAF block automatically is out of scope for this client.
 
 **Matching: exact name first, proximity as fallback.** For each station, if a Reve location
 exists whose `name` matches exactly (case/accent-insensitive) it's used regardless of
 distance; if more than one Reve location shares that exact name, the nearest of those wins.
-Only when there's no name match at all does it fall back to nearest-within-`thresholdMeters`
-(the only strategy before this). The enrichment-complete log reports `matchedByName` vs
-`matchedByProximity` so you can see which one fired.
-
-```js
-const enriched = await experimental.enrichStationsExperimental(stations, {
-  acknowledgeUnsupported: true,
-  cacheDir: './cache/reve-public', // <- makes maxPages a per-run budget, not a hard ceiling
-  maxPages: 50,
-});
-```
+Only when there's no name match at all does it fall back to nearest-within-`thresholdMeters`.
+The enrichment-complete log reports `matchedByName` vs `matchedByProximity` so you can see
+which one fired.
 
 **ES:** `experimental.createRevePublicClient` y `experimental.enrichStationsExperimental`
 hablan con `https://www.mapareve.es/api/public/v1` — la API interna y sin autenticación que
@@ -428,25 +417,24 @@ bundle JS (no la `/api/external/v1` documentada que usa el resto de esta librer�
 requiere API key, no se observó ningún límite de peticiones documentado, y devuelve el
 estado y las tarifas ya embebidos por emplazamiento en cada página.
 
-**⚠️ Volumen de peticiones — leer antes de ponerlo en un cron.** `POST /locations` limita
-`per_page` a **25 como máximo** (confirmado en vivo — 10/15/20/25 funcionan, 30/50/100 dan
-400) y exige un bounding box (por defecto, toda España si no pasas uno vía `filters`).
-Cubrir el país entero son por tanto **~582 peticiones secuenciales** (~14.550 ubicaciones ÷
-25), no "un par de llamadas". `maxPages` viene con **50** por defecto (1.250 ubicaciones, con
-`per_page: 25`) precisamente por esto — subirlo para cubrir toda España implica asumir ~582
-peticiones contra un endpoint sin límite ni SLA documentados, en cada ejecución. Si esto
-corre en un cron, dimensiona `maxPages` (o acota `filters` a una región/CPO) a propósito; no
-lo dejes en "traer todo".
+**⚠️ Volumen de peticiones — sin caché, barrido completo en cada llamada.** No hay caché en
+disco ni cursor reanudable: cada llamada recorre todas las páginas del dataset, de la 1 a la
+última, siempre desde cero. `POST /locations` limita `per_page` a **25 como máximo**
+(confirmado en vivo — 10/15/20/25 funcionan, 30/50/100 dan 400) y exige un bounding box (por
+defecto, toda España si no pasas uno vía `filters`), así que un barrido completo son **~582
+peticiones secuenciales** (~14.550 ubicaciones ÷ 25) contra un endpoint sin límite ni SLA
+documentados — **cada vez**, incluido cada disparo del cron si esto corre en uno. Pasa
+`maxPages` tú mismo si quieres acotar una ejecución concreta (p. ej. para probar).
 
-**Para cubrir más que `maxPages` a lo largo del tiempo: pasa `cacheDir`.** Sin él, cada
-llamada vuelve a empezar en la página 1 y solo se usa lo que trae esa llamada — la cobertura
-nunca crece. Con `cacheDir`, cada llamada continúa desde la página donde se quedó la anterior
-(persistido en `<cacheDir>/reve_public_sweep.json`) y fusiona las ubicaciones nuevas con las
-ya acumuladas, así que un cron horario con `maxPages: 50` cubre las páginas 1-50 en la
-primera ejecución, 51-100 en la siguiente, etc. — cobertura nacional completa en ~12
-ejecuciones (~12 horas a 50 páginas/ejecución, 1.250 ubicaciones/ejecución) en vez de una
-ráfaga de 582 peticiones de golpe. Al completar una vuelta entera, el cursor vuelve a la
-página 1 para recoger cambios (estado, tarifas, nuevos emplazamientos) en los datos de Reve.
+**Resiliencia**: si una página falla (timeout, error de red, HTTP 429/5xx) se reintenta con
+backoff exponencial (`retries`, 3 por defecto) antes de rendirse **solo con esa página** —
+no aborta la ejecución entera, así que una página mala no tira todas las demás ya
+conseguidas. Si `maxConsecutivePageFailures` páginas seguidas fallan incluso tras sus propios
+reintentos (3 por defecto), el barrido para antes de tiempo en vez de machacar el resto del
+dataset a ciegas — tantos fallos seguidos indican algo sistémico (el WAF, una caída), no un
+bache puntual. Un HTTP 400 (petición inválida) o 403 (probablemente el WAF de Incapsula)
+nunca se reintentan — un 400 no se arregla solo, y reintentar/evadir un bloqueo del WAF
+automáticamente queda fuera del alcance de este cliente.
 
 **Matching: primero nombre exacto, proximidad como respaldo.** Para cada estación, si existe
 una ubicación Reve cuyo `name` coincide exactamente (ignorando mayúsculas/acentos) se usa
@@ -454,14 +442,6 @@ sin importar la distancia; si varias ubicaciones Reve comparten ese nombre exact
 más cercana de esas. Solo si no hay ningún nombre coincidente cae al comportamiento anterior
 (más cercana dentro de `thresholdMeters`). El log de fin de enriquecimiento reporta
 `matchedByName` vs `matchedByProximity` para que veas cuál se disparó.
-
-```js
-const enriched = await experimental.enrichStationsExperimental(stations, {
-  acknowledgeUnsupported: true,
-  cacheDir: './cache/reve-public', // hace de maxPages un presupuesto por ejecución, no un tope duro
-  maxPages: 50,
-});
-```
 
 Nada de eso la hace soportada: no está publicada por Red Eléctrica, puede cambiar o
 desaparecer sin aviso, y su uso automatizado fuera del navegador puede quedar fuera de los
