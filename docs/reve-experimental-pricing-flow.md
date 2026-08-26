@@ -354,3 +354,21 @@ En este orden, de más probable a menos probable:
 No hace falta ningún header de autenticación (`x-api-key`, `Authorization`, cookies) para
 ninguna de las dos peticiones — es exactamente lo que confirmamos durante la investigación
 inicial de este endpoint.
+
+---
+
+## 9. Scripts para auditar offline (`scripts/`)
+
+Tres scripts standalone (no se publican con el paquete):
+
+```bash
+node scripts/dump-reve-locations.js --out ./reve-dump.ndjson
+node scripts/dump-dgt-stations.js --out ./dgt-dump.ndjson
+node scripts/reconcile-dgt-reve.js --dgt ./dgt-dump.ndjson --reve ./reve-dump.ndjson --out ./reconciled.ndjson
+```
+
+`reconcile-dgt-reve.js` no reimplementa el matching — llama directamente a
+`experimental.enrichStationsExperimental` de la librería, con un `httpClient` falso que
+sirve el JSON de `reve-dump.ndjson` en vez de llamar a la red. El resultado es exactamente
+el mismo que produciría una ingesta real con esos mismos datos, así que sirve para auditar
+sin gastar peticiones ni depender de que el dataset en vivo no cambie entre pruebas.
