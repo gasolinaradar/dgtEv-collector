@@ -19,7 +19,24 @@ const axios = require('axios');
 const REVE_PUBLIC_BASE_URL = 'https://www.mapareve.es/api/public/v1';
 const DEFAULT_TIMEOUT = 30000;
 const DEFAULT_RETRIES = 2;
-const DEFAULT_PAGE_SIZE = 50;
+// Confirmed live (2026-08-26): POST /locations returns 400 "per_page no tiene un valor
+// válido" for values other than 10 — the only page size the mapareve.es frontend itself
+// ever sends for this endpoint. Not documented anywhere, so treat as the only known-safe
+// value until proven otherwise.
+const DEFAULT_PAGE_SIZE = 10;
+// Confirmed live (2026-08-26): POST /locations returns 400 "latitude_ne/longitude_ne/
+// latitude_sw/longitude_sw es obligatorio" without a bounding box — despite the frontend
+// code appearing to strip these for its "national list" view (see ne(t, true) in the
+// bundle). Default to a box covering all of Spain (mainland + Balearics + Canary Islands,
+// same range used in test/live.test.js) so callers get nationwide results without having
+// to know about this quirk; still overridable via `filters`.
+const SPAIN_BBOX = { latitude_ne: 44, longitude_ne: 4.5, latitude_sw: 27, longitude_sw: -18.5 };
+// Confirmed live (2026-08-26): per_page is fixed at 10, so a full-Spain sweep of POST
+// /locations is ~1450 sequential requests (~14,500 locations ÷ 10) — not a "few requests",
+// and not something to run unbounded on a schedule against an endpoint with no documented
+// rate limit or SLA. maxPages defaults low on purpose: a caller who genuinely wants
+// nationwide coverage has to raise it explicitly and accept that request volume.
+const DEFAULT_MAX_PAGES = 50; // 500 locations
 // No documented rate limit exists for this endpoint. This delay between paginated
 // requests is a self-imposed courtesy throttle, not a requirement from Reve.
 const DEFAULT_REQUEST_DELAY_MS = 150;
@@ -82,6 +99,8 @@ async function* streamLocations(httpClient, opts = {}) {
     perPage = DEFAULT_PAGE_SIZE,
     filters = {},
     requestDelayMs = DEFAULT_REQUEST_DELAY_MS,
+    maxPages = DEFAULT_MAX_PAGES,
+    logger = console,
     ...rest
   } = opts;
 
@@ -90,14 +109,21 @@ async function* streamLocations(httpClient, opts = {}) {
 
   for (;;) {
     if (page > totalPages) break;
+    if (page > maxPages) {
+      logger.warn(
+        `Reve public API: stopped at maxPages (${maxPages}) — dataset is partial. ` +
+          `Raise options.maxPages if you deliberately want more (each extra page is one request).`,
+      );
+      break;
+    }
     if (page > 1) await sleep(requestDelayMs);
 
     const body = await request(
       httpClient,
       'post',
       '/locations',
-      { data: filters, params: { page, per_page: perPage } },
-      rest,
+      { data: { ...SPAIN_BBOX, ...filters }, params: { page, per_page: perPage } },
+      { logger, ...rest },
     );
     const { data, pagination } = unwrapPaginated(body);
 
@@ -142,7 +168,7 @@ function createRevePublicClient(options = {}) {
         httpClient,
         'post',
         '/locations',
-        { data: filters, params: { page, per_page: perPage } },
+        { data: { ...SPAIN_BBOX, ...filters }, params: { page, per_page: perPage } },
         buildOpts(opts),
       );
       return unwrapPaginated(body);
@@ -203,4 +229,6 @@ function createRevePublicClient(options = {}) {
 module.exports = {
   createRevePublicClient,
   REVE_PUBLIC_BASE_URL,
+  SPAIN_BBOX,
+  DEFAULT_MAX_PAGES,
 };

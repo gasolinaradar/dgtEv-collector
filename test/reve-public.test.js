@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { createRevePublicClient, REVE_PUBLIC_BASE_URL } = require('../src/reve-public');
+const { createRevePublicClient, REVE_PUBLIC_BASE_URL, DEFAULT_MAX_PAGES } = require('../src/reve-public');
 
 const silentLogger = { info: () => {}, warn: () => {}, debug: () => {} };
 
@@ -74,6 +74,49 @@ test('fetchLocationsPage POSTs filters as body and page/per_page as params', asy
   assert.equal(result.pagination.total_pages, 1);
 });
 
+test('fetchLocationsPage defaults to a full-Spain bbox — POST /locations 400s without one', async () => {
+  let capturedData;
+  const fakeHttpClient = {
+    post: async (url, data) => {
+      capturedData = data;
+      return { status: 200, data: { data: [], pagination: { page: 1, per_page: 10, total_pages: 1, total_count: 0 } } };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  await client.fetchLocationsPage();
+  assert.equal(capturedData.latitude_ne, 44);
+  assert.equal(capturedData.longitude_ne, 4.5);
+  assert.equal(capturedData.latitude_sw, 27);
+  assert.equal(capturedData.longitude_sw, -18.5);
+});
+
+test('fetchLocationsPage lets filters override the default bbox', async () => {
+  let capturedData;
+  const fakeHttpClient = {
+    post: async (url, data) => {
+      capturedData = data;
+      return { status: 200, data: { data: [], pagination: { page: 1, per_page: 10, total_pages: 1, total_count: 0 } } };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  await client.fetchLocationsPage({ filters: { latitude_ne: 40.6, latitude_sw: 40.3 } });
+  assert.equal(capturedData.latitude_ne, 40.6);
+  assert.equal(capturedData.latitude_sw, 40.3);
+  assert.equal(capturedData.longitude_ne, 4.5); // untouched default
+});
+
 test('fetchAllLocations paginates using body pagination.total_pages', async () => {
   let calls = 0;
   const fakeHttpClient = {
@@ -115,6 +158,57 @@ test('fetchAllLocations stops when a short page has no total_pages hint', async 
 
   const locations = await client.fetchAllLocations({ perPage: 5, requestDelayMs: 0 });
   assert.equal(locations.length, 2);
+});
+
+test('fetchAllLocations stops at maxPages even if the server claims more pages exist', async () => {
+  let calls = 0;
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      calls += 1;
+      const page = config.params.page;
+      // Server claims 2000 total pages (~20,000 locations) — a full-Spain-sized sweep.
+      return {
+        status: 200,
+        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: 2000, total_count: 20000 } },
+      };
+    },
+  };
+
+  const warnings = [];
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: { ...silentLogger, warn: (msg) => warnings.push(msg) },
+  });
+
+  const locations = await client.fetchAllLocations({ maxPages: 3, requestDelayMs: 0 });
+  assert.equal(calls, 3, 'must not fetch more than maxPages pages');
+  assert.equal(locations.length, 3);
+  assert.ok(warnings.some((w) => w.includes('maxPages')), 'should warn that the dataset is partial');
+});
+
+test('fetchAllLocations defaults to DEFAULT_MAX_PAGES without an explicit maxPages', async () => {
+  let calls = 0;
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      calls += 1;
+      const page = config.params.page;
+      return {
+        status: 200,
+        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: 99999, total_count: 999990 } },
+      };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  const locations = await client.fetchAllLocations({ requestDelayMs: 0 });
+  assert.equal(calls, DEFAULT_MAX_PAGES, 'default cap must kick in without an explicit maxPages');
+  assert.equal(locations.length, DEFAULT_MAX_PAGES);
 });
 
 test('fetchMarkers sends bbox and zoom as the POST body', async () => {

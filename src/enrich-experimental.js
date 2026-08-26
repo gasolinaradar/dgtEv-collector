@@ -106,14 +106,20 @@ async function enrichStationsExperimental(stations, options = {}) {
     logger = console,
     acknowledgeUnsupported,
     filters = {},
-    perPage = 50,
+    // See reve-public.js: 10 is the only per_page value POST /locations accepts.
+    perPage = 10,
+    // See reve-public.js DEFAULT_MAX_PAGES: nationwide coverage is ~1450 pages at
+    // per_page=10. Left undefined here so reve-public.js's conservative default (50
+    // pages / 500 locations) applies unless the caller deliberately raises it — do NOT
+    // default this to "cover all of Spain" on a schedule without reading that comment.
+    maxPages,
   } = options;
 
   const reveClient = createRevePublicClient({ httpClient, logger, acknowledgeUnsupported });
 
   let reveLocations = [];
   try {
-    reveLocations = await reveClient.fetchAllLocations({ filters, perPage });
+    reveLocations = await reveClient.fetchAllLocations({ filters, perPage, maxPages });
   } catch (error) {
     logger.warn('Failed to fetch Reve public locations for matching', {
       error: error.message,

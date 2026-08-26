@@ -377,6 +377,7 @@ const { experimental } = require('@gasolinaradar/dgt-ev-collector');
 
 const enriched = await experimental.enrichStationsExperimental(stations, {
   acknowledgeUnsupported: true, // required — you're opting into an unsupported endpoint
+  maxPages: 50,                 // see warning below before raising this
 });
 ```
 
@@ -385,13 +386,30 @@ const enriched = await experimental.enrichStationsExperimental(stations, {
 (`reveLocationId`, `operator`, `prices`, `availability`) match `enrichStations()` exactly,
 so it's a drop-in comparison for the same `stations` array.
 
+**⚠️ Request volume — read before running this on a schedule.** `POST /locations` only
+accepts `per_page: 10` (confirmed live — any other value 400s) and requires a bounding box
+(defaults to all of Spain if you don't pass one via `filters`). Covering the whole country
+is therefore **~1,450 sequential requests** (~14,500 locations ÷ 10), not "a couple of
+calls". `maxPages` defaults to **50** (500 locations) for exactly this reason — raising it
+to cover all of Spain means committing to ~1,450 requests against an endpoint with no
+documented rate limit or SLA, on every run. If this runs on a cron, size `maxPages` (or
+scope `filters` to a region/CPO) deliberately; don't default to "fetch everything."
+
 **ES:** `experimental.createRevePublicClient` y `experimental.enrichStationsExperimental`
 hablan con `https://www.mapareve.es/api/public/v1` — la API interna y sin autenticación que
 usa el propio mapa de mapareve.es en el navegador, obtenida por ingeniería inversa de su
 bundle JS (no la `/api/external/v1` documentada que usa el resto de esta librería). No
-requiere API key y no se observó ningún límite de peticiones documentado, y devuelve el
-estado y las tarifas ya embebidos por emplazamiento (una sola llamada paginada en vez de
-tres feeds separados).
+requiere API key, no se observó ningún límite de peticiones documentado, y devuelve el
+estado y las tarifas ya embebidos por emplazamiento en cada página.
+
+**⚠️ Volumen de peticiones — leer antes de ponerlo en un cron.** `POST /locations` solo
+acepta `per_page: 10` (confirmado en vivo — cualquier otro valor da 400) y exige un bounding
+box (por defecto, toda España si no pasas uno vía `filters`). Cubrir el país entero son por
+tanto **~1.450 peticiones secuenciales** (~14.500 ubicaciones ÷ 10), no "un par de
+llamadas". `maxPages` viene con **50** por defecto (500 ubicaciones) precisamente por esto —
+subirlo para cubrir toda España implica asumir ~1.450 peticiones contra un endpoint sin
+límite ni SLA documentados, en cada ejecución. Si esto corre en un cron, dimensiona
+`maxPages` (o acota `filters` a una región/CPO) a propósito; no lo dejes en "traer todo".
 
 Nada de eso la hace soportada: no está publicada por Red Eléctrica, puede cambiar o
 desaparecer sin aviso, y su uso automatizado fuera del navegador puede quedar fuera de los
