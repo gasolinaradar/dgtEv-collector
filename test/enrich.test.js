@@ -225,6 +225,34 @@ test('mergeAvailability returns undefined for empty evses', () => {
   assert.equal(mergeAvailability(undefined, {}), undefined);
 });
 
+test('mergeAvailability includes a per-EVSE breakdown with connector power/type', () => {
+  const evses = [
+    {
+      id: 'evse-slow',
+      connectors: [{ standard: 'IEC_62196_T2', power_type: 'AC_3_PHASE', max_electric_power: 22000 }],
+    },
+    {
+      id: 'evse-fast',
+      connectors: [{ standard: 'IEC_62196_T2_COMBO', power_type: 'DC', max_electric_power: 150000 }],
+    },
+  ];
+  const statusMap = {
+    'evse-slow': { status: 'AVAILABLE' },
+    'evse-fast': { status: 'OUTOFORDER' },
+  };
+
+  const result = mergeAvailability(evses, statusMap);
+  assert.equal(result.evses.length, 2);
+
+  const slow = result.evses.find((e) => e.evseId === 'evse-slow');
+  assert.equal(slow.status, 'AVAILABLE');
+  assert.equal(slow.connectors[0].maxPowerW, 22000);
+
+  const fast = result.evses.find((e) => e.evseId === 'evse-fast');
+  assert.equal(fast.status, 'OUTOFORDER');
+  assert.equal(fast.connectors[0].maxPowerW, 150000);
+});
+
 test('enrichStations returns original when no API key', async () => {
   const stations = [
     {

@@ -91,6 +91,39 @@ test('mergePublicAvailability returns undefined when there are no EVSE statuses'
   assert.equal(mergePublicAvailability(reveLoc), undefined);
 });
 
+test('mergePublicAvailability includes a per-EVSE breakdown with connector power/type, so slow-vs-fast is distinguishable from the status alone', () => {
+  const reveLoc = normalizeRevePublicLocation(
+    samplePublicLocation({
+      evses: [
+        {
+          evse_id: 'evse-slow-ok',
+          status: 'AVAILABLE',
+          connectors: [{ id: 'c1', standard: 'IEC_62196_T2', max_electric_power: 22000 }],
+        },
+        {
+          evse_id: 'evse-fast-broken',
+          status: 'OUTOFORDER',
+          connectors: [{ id: 'c2', standard: 'IEC_62196_T2_COMBO', max_electric_power: 150000 }],
+        },
+      ],
+    }),
+  );
+
+  const availability = mergePublicAvailability(reveLoc);
+  // Summary status alone would just say "AVAILABLE" (highest priority) — it can't tell
+  // you the fast connector is the one that's actually broken. The per-EVSE array can.
+  assert.equal(availability.status, 'AVAILABLE');
+  assert.equal(availability.evses.length, 2);
+
+  const slow = availability.evses.find((e) => e.evseId === 'evse-slow-ok');
+  assert.equal(slow.status, 'AVAILABLE');
+  assert.equal(slow.connectors[0].maxPowerW, 22000);
+
+  const fast = availability.evses.find((e) => e.evseId === 'evse-fast-broken');
+  assert.equal(fast.status, 'OUTOFORDER');
+  assert.equal(fast.connectors[0].maxPowerW, 150000);
+});
+
 test('enrichStationsPublic throws when acknowledgeUnsupported is missing', async () => {
   await assert.rejects(
     () => enrichStationsPublic([], {}),

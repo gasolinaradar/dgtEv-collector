@@ -227,9 +227,13 @@ When enriched with Reve data (`enrich.reveApiKey`), the fields are populated:
     { type: 'TIME', price: 0.02, currency: 'EUR', stepSize: 60 },
   ],
   availability: {
-    status: 'AVAILABLE',   // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | UNKNOWN
+    status: 'AVAILABLE',   // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | PLANNED | REMOVED | UNKNOWN
     evseCount: 2,
     lastUpdated: '2026-08-25T10:00:00Z',
+    evses: [                // per-EVSE breakdown — e.g. "fast one is broken, slow one is free"
+      { evseId: 'ES*ACM*E1*1', status: 'AVAILABLE', connectors: [{ standard: 'IEC_62196_T2', powerType: 'AC_3_PHASE', maxPowerW: 22000 }] },
+      { evseId: 'ES*ACM*E1*2', status: 'OUTOFORDER', connectors: [{ standard: 'IEC_62196_T2_COMBO', powerType: 'DC', maxPowerW: 150000 }] },
+    ],
   },
 }
 ```

@@ -111,8 +111,14 @@ hasta que se enriquece.
   ],
   availability: {
     status: 'AVAILABLE', // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | PLANNED | REMOVED | UNKNOWN
+                          // el de mayor prioridad entre todos los EVSEs (ver STATUS_PRIORITY más abajo)
     evseCount: 2,
     lastUpdated: '2026-08-26T10:00:00Z',
+    evses: [               // desglose por EVSE — permite distinguir p. ej. "el rápido está roto,
+                            // el lento libre" en vez de perder ese detalle en el status resumen
+      { evseId: 'ES*ACM*E000001*1', status: 'AVAILABLE', connectors: [{ standard: 'IEC_62196_T2', powerType: 'AC_3_PHASE', maxPowerW: 22000 }] },
+      { evseId: 'ES*ACM*E000001*2', status: 'OUTOFORDER', connectors: [{ standard: 'IEC_62196_T2_COMBO', powerType: 'DC', maxPowerW: 150000 }] },
+    ],
   },
 
   // --- Solo si el match vino de la fuente PUBLIC ---
@@ -125,10 +131,35 @@ hasta que se enriquece.
 }
 ```
 
-`prices`/`availability` no distinguen entre EVSEs/conectores concretos de la estación DGT —
-son el conjunto (deduplicado) de precios/estado de **todos** los conectores de la ubicación
-Reve matcheada. `reveData` sí trae el detalle completo por EVSE/conector si hace falta bajar
-a ese nivel.
+`prices` no distingue entre EVSEs/conectores concretos de la estación DGT — es el conjunto
+(deduplicado) de precios de **todos** los conectores de la ubicación Reve matcheada.
+
+`availability.status` es un resumen: el estado de mayor prioridad entre todos los EVSEs de
+la ubicación (significado de cada valor, estándar OCPI):
+
+| Status | Significado |
+|---|---|
+| `AVAILABLE` | Libre, listo para iniciar una carga. |
+| `CHARGING` | Ocupado, hay un vehículo cargando ahora mismo. |
+| `RESERVED` | Reservado por un usuario concreto. |
+| `BLOCKED` | Ocupado sin sesión activa (bloqueado físicamente, cable puesto sin cargar). |
+| `INOPERATIVE` | Temporalmente no disponible, sin estar averiado (mantenimiento, aún no activo). |
+| `OUTOFORDER` | Averiado / fuera de servicio. |
+| `PLANNED` | Instalación planificada, todavía no operativa. |
+| `REMOVED` | Dado de baja. |
+| `UNKNOWN` | Reve no reporta estado para ese EVSE. |
+
+Prioridad usada para elegir el resumen: `CHARGING > AVAILABLE > RESERVED > BLOCKED >
+INOPERATIVE > OUTOFORDER > UNKNOWN > PLANNED > REMOVED` — nunca oculta un estado "bueno"
+detrás de uno peor, pero por sí solo no dice cuántos EVSEs están en cada estado, ni con qué
+conector (p. ej. si el punto rápido está averiado y solo queda libre el lento).
+
+Para eso está `availability.evses`: un desglose por EVSE con su `status` individual y el
+resumen de sus conectores (`standard`, `powerType`, `maxPowerW`), para poder distinguir en
+la UI "3 de 4 libres, el averiado es el rápido" en vez de depender solo del resumen.
+`reveData` sigue disponible (solo fuente `public`) con el objeto crudo completo si hace
+falta bajar a un nivel de detalle que ni `evses` cubre (tarifas por conector, horarios,
+métodos de pago, etc.).
 
 ---
 
@@ -252,8 +283,11 @@ complete`) — trae el ratio `matched`/`totalStations` y cuántos quedaron con p
   nombre exacto normalizado — no hay un id compartido entre el dataset DGT y Reve. Puede
   haber falsos positivos si dos ubicaciones físicas distintas están muy cerca o comparten
   nombre genérico (p. ej. una marca sin más contexto).
-- **`prices`/`availability` son agregados de todos los conectores de la ubicación Reve
-  matcheada**, no filtrados por el tipo de conector concreto de la estación DGT.
+- **`prices` es un agregado de todos los conectores de la ubicación Reve matcheada**, no
+  filtrado por el tipo de conector concreto de la estación DGT. `availability.status`
+  también es un resumen, pero `availability.evses` sí da el desglose por EVSE individual
+  (ver sección 5) — no hace falta caer a `reveData` solo para saber qué EVSE está en qué
+  estado.
 - **Memoria en `public`**: las ubicaciones se reciben en streaming, página a página, y se
   emparejan contra las estaciones de entrada al vuelo — como máximo se retiene **una**
   ubicación Reve por estación de entrada (su mejor coincidencia actual), y solo se parsea

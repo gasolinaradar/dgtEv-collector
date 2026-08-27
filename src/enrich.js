@@ -231,14 +231,28 @@ function mergePrices(dgtConnectors, reveConnectors, tariffMap) {
   return prices.length > 0 ? prices : undefined;
 }
 
+function summarizeConnectors(connectors) {
+  return (Array.isArray(connectors) ? connectors : []).map((conn) => ({
+    standard: conn.standard,
+    powerType: conn.power_type,
+    maxPowerW: conn.max_electric_power,
+  }));
+}
+
 function mergeAvailability(evses, statusMap) {
   if (!Array.isArray(evses) || evses.length === 0) return undefined;
 
   const statuses = [];
+  const evseDetails = [];
   for (const evse of evses) {
     const st = statusMap[evse.id];
     if (st) {
       statuses.push(st.status);
+      evseDetails.push({
+        evseId: evse.id,
+        status: st.status,
+        connectors: summarizeConnectors(evse.connectors),
+      });
     }
   }
 
@@ -250,6 +264,7 @@ function mergeAvailability(evses, statusMap) {
         status: p,
         evseCount: statuses.length,
         lastUpdated: new Date().toISOString(),
+        evses: evseDetails,
       };
     }
   }
@@ -258,6 +273,7 @@ function mergeAvailability(evses, statusMap) {
     status: 'UNKNOWN',
     evseCount: statuses.length,
     lastUpdated: new Date().toISOString(),
+    evses: evseDetails,
   };
 }
 
@@ -488,6 +504,7 @@ module.exports = {
   buildStatusMap,
   mergePrices,
   mergeAvailability,
+  summarizeConnectors,
   DEFAULT_THRESHOLD_METERS,
   STATUS_PRIORITY,
 };

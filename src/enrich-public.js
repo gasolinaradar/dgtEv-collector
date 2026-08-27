@@ -1,5 +1,5 @@
 const { createRevePublicClient, DEFAULT_MAX_PAGES } = require('./reve-public');
-const { SpatialIndex, STATUS_PRIORITY, DEFAULT_THRESHOLD_METERS, haversineMeters } = require('./enrich');
+const { SpatialIndex, STATUS_PRIORITY, DEFAULT_THRESHOLD_METERS, haversineMeters, summarizeConnectors } = require('./enrich');
 
 function normalizeStationName(name) {
   if (typeof name !== 'string') return null;
@@ -63,15 +63,22 @@ function mergePublicPrices(reveLoc) {
 
 function mergePublicAvailability(reveLoc) {
   const evses = Array.isArray(reveLoc.raw?.evses) ? reveLoc.raw.evses : [];
-  const statuses = evses.filter((evse) => typeof evse.status === 'string').map((evse) => evse.status);
-  if (statuses.length === 0) return undefined;
+  const withStatus = evses.filter((evse) => typeof evse.status === 'string');
+  if (withStatus.length === 0) return undefined;
+
+  const statuses = withStatus.map((evse) => evse.status);
+  const evseDetails = withStatus.map((evse) => ({
+    evseId: evse.evse_id,
+    status: evse.status,
+    connectors: summarizeConnectors(evse.connectors),
+  }));
 
   for (const p of STATUS_PRIORITY) {
     if (statuses.includes(p)) {
-      return { status: p, evseCount: statuses.length, lastUpdated: new Date().toISOString() };
+      return { status: p, evseCount: statuses.length, lastUpdated: new Date().toISOString(), evses: evseDetails };
     }
   }
-  return { status: 'UNKNOWN', evseCount: statuses.length, lastUpdated: new Date().toISOString() };
+  return { status: 'UNKNOWN', evseCount: statuses.length, lastUpdated: new Date().toISOString(), evses: evseDetails };
 }
 
 function buildDgtIndices(stations) {
