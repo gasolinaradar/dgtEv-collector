@@ -216,6 +216,40 @@ test('fetchAllLocations walks every page the server reports without an explicit 
   assert.equal(locations.length, totalPages);
 });
 
+test('streamLocationPages reports progress as a percentage of total_pages, not just at the end', async () => {
+  const totalPages = 4;
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      return {
+        status: 200,
+        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: totalPages, total_count: totalPages } },
+      };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  const progressCalls = [];
+  await client.fetchAllLocations({
+    requestDelayMs: 0,
+    reportProgress: (percent, meta) => progressCalls.push({ percent, meta }),
+  });
+
+  assert.equal(progressCalls.length, totalPages, 'one progress event per page received');
+  assert.deepEqual(
+    progressCalls.map((c) => c.percent),
+    [25, 50, 75, 99],
+    'percent tracks page/total_pages, capped below 100 so the caller can signal the real 100 once fully done',
+  );
+  assert.equal(progressCalls[1].meta.page, 2);
+  assert.equal(progressCalls[1].meta.totalPages, totalPages);
+});
+
 test('fetchLocationsSweep resumes from startPage and reports nextPage when capped', async () => {
   const fakeHttpClient = {
     post: async (url, data, config) => {

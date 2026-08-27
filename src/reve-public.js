@@ -74,8 +74,10 @@ async function* streamLocationPages(httpClient, opts = {}) {
     startPage = 1,
     logger = console,
     maxConsecutivePageFailures = 3,
+    reportProgress,
     ...rest
   } = opts;
+  const emitProgress = typeof reportProgress === 'function' ? reportProgress : () => {};
 
   let page = startPage;
   let totalPages = null;
@@ -139,6 +141,13 @@ async function* streamLocationPages(httpClient, opts = {}) {
       page,
       count: data.length,
       ms: Date.now() - requestStart,
+      totalPages,
+      totalCount: pagination?.total_count,
+    });
+
+    emitProgress(totalPages ? Math.min(99, Math.round((page / totalPages) * 100)) : undefined, {
+      stage: 'reve_public_locations_sweep',
+      page,
       totalPages,
       totalCount: pagination?.total_count,
     });

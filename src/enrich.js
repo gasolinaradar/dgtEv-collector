@@ -286,11 +286,15 @@ async function enrichStations(stations, options = {}) {
     logger = console,
     dateFrom: dateFromOverride,
     onlyDynamicInfo,
+    reportProgress,
   } = options;
+  const emitProgress = typeof reportProgress === 'function' ? reportProgress : () => {};
 
   if (!reveApiKey) {
     return stations;
   }
+
+  emitProgress(0, { stage: 'reve_locations' });
 
   const reveClient = createReveClient({
     apiKey: reveApiKey,
@@ -343,6 +347,8 @@ async function enrichStations(stations, options = {}) {
     logger.warn('Failed to fetch Reve locations for matching', { error: error.message });
   }
 
+  emitProgress(40, { stage: 'reve_locations', count: fetchedLocations.length });
+
   // Con cache: el índice de matching se construye desde el histórico completo acumulado, no
   // solo desde lo fetcheado en este ciclo. Sin cache (p. ej. collector.enrich() puntual sin
   // cacheDir): no hay nada que acumular entre llamadas, así que se usa directamente lo recién
@@ -378,6 +384,8 @@ async function enrichStations(stations, options = {}) {
     }
   }
 
+  emitProgress(70, { stage: 'reve_status', count: statusData.length });
+
   logger.info('Fetching Reve tariffs', { dateFrom: tariffsDateFrom || 'full' });
   try {
     tariffsData = await reveClient.fetchTariffs({ dateFrom: tariffsDateFrom });
@@ -398,6 +406,8 @@ async function enrichStations(stations, options = {}) {
       }));
     }
   }
+
+  emitProgress(90, { stage: 'reve_tariffs', count: tariffsData.length });
 
   if (cache) {
     const statusEntries = {};
@@ -491,6 +501,7 @@ async function enrichStations(stations, options = {}) {
     withPrices: enriched.filter((s) => s.prices).length,
     withAvailability: enriched.filter((s) => s.availability).length,
   });
+  emitProgress(100, { stage: 'reve_enrichment_complete', matched });
 
   return enriched;
 }

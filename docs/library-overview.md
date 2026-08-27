@@ -75,6 +75,16 @@ fetchStations() / streamStations()
 por debajo. `collector.enrich(stations, enrichOptions)` permite enriquecer un array ya
 existente sin volver a descargar la DGT.
 
+**`context.reportProgress(percent, metadata)`**: si se pasa un callback y `options.enrich`
+está presente, se invoca **también** durante la fase de enriquecimiento Reve, no solo
+durante la descarga de DGT (antes de esta versión solo cubría la parte de DGT, por eso el
+`%` se quedaba "parado en 100" mientras el barrido de Reve seguía corriendo en silencio por
+detrás — hasta ~582 peticiones secuenciales en `source: 'public'`). Son **dos barridos 0→100
+independientes** sobre el mismo callback (uno para DGT, otro para Reve) — hay que usar
+`metadata.stage` para distinguirlos, no asumir que el número es monótonamente creciente de
+principio a fin. Detalle completo de los `stage` y en qué `%` dispara cada uno, en el README
+(`## Progress reporting`).
+
 ---
 
 ## 4. Modelo de datos: `Station`

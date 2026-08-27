@@ -396,6 +396,29 @@ test('enrichStations fetches locations before status/tariffs (locations get prio
   );
 });
 
+test('enrichStations reports coarse progress across its locations/status/tariffs stages', async () => {
+  const fakeHttpClient = {
+    get: async () => ({ status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } }),
+  };
+
+  const progressCalls = [];
+  await enrichStations([], {
+    reveApiKey: 'test-key',
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    reportProgress: (percent, meta) => progressCalls.push({ percent, meta }),
+  });
+
+  assert.deepEqual(
+    progressCalls.map((c) => c.percent),
+    [0, 40, 70, 90, 100],
+  );
+  assert.deepEqual(
+    progressCalls.map((c) => c.meta.stage),
+    ['reve_locations', 'reve_locations', 'reve_status', 'reve_tariffs', 'reve_enrichment_complete'],
+  );
+});
+
 test('enrichStations accumulates locations in cache across calls instead of losing coverage each cycle', async () => {
   const dir = tempDir();
 

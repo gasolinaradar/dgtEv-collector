@@ -213,6 +213,7 @@ async function fetchStations(options = {}, hooks = {}) {
       ...enrichOpts,
       httpClient: resolveHttpClient(options.httpClient),
       logger,
+      reportProgress: hooks.reportProgress,
     });
   }
 

@@ -249,19 +249,58 @@ Notes / Notas:
 
 ## Progress reporting / Reporte de progreso
 
-The collector accepts an optional `context.reportProgress(percent, metadata)` callback:
+The collector accepts an optional `context.reportProgress(percent, metadata)` callback.
+**If `options.enrich` is set, the same callback also gets called during the Reve
+enrichment phase that runs afterward** — before this, `reportProgress` only ever covered
+the DGT fetch, so a UI driven by it looked "stuck at 100%" while the Reve sweep (up to
+~582 sequential requests for `source: 'public'`) was still running silently in the
+background. Use `metadata.stage` to tell the two phases apart — they're two separate 0→100
+sweeps over the same callback, not one continuous number:
 
 ```js
 const stations = await dgtEvCollector.fetch({
+  enrich: { source: 'public', acknowledgeUnsupported: true },
   reportProgress(percent, metadata) {
-    // percent: 5   -> requesting the dataset
-    // percent: 35  -> streaming/parsing the XML has started
-    // percent: 70  -> the whole response has been read (final sites still being yielded)
-    // percent: 100 -> completed
+    // --- DGT phase ---
+    // percent: 5   stage: 'requesting_dataset'
+    // percent: 35  stage: 'parsing_dataset'
+    // percent: 70  stage: 'normalizing_dataset'
+    // percent: 100 stage: 'completed'
+
+    // --- Reve enrichment phase (source: 'public') ---
+    // percent: 0        stage: 'reve_public_locations_sweep'                (starting)
+    // percent: 1..99    stage: 'reve_public_locations_sweep', page, totalPages  (per page fetched)
+    // percent: 100       stage: 'reve_public_locations_sweep', fetched, kept    (sweep done)
+    // percent: 100       stage: 'reve_public_enrichment_complete', matched     (matching done)
+
+    // --- Reve enrichment phase (source: 'external') ---
+    // percent: 0    stage: 'reve_locations'            (starting)
+    // percent: 40   stage: 'reve_locations', count      (locations fetched)
+    // percent: 70   stage: 'reve_status', count          (status fetched)
+    // percent: 90   stage: 'reve_tariffs', count          (tariffs fetched)
+    // percent: 100  stage: 'reve_enrichment_complete', matched
+
     console.log(percent, metadata.stage);
   },
 });
 ```
+
+If your UI wants a single combined bar instead of two sequential ones, weight each phase
+yourself using `stage` — e.g. DGT stages count for 0-50% of the combined bar, Reve stages
+for 50-100%. This library doesn't rescale the numbers itself so DGT-only callers (no
+`enrich`) keep seeing the exact 5/35/70/100 they always have.
+
+**ES:** El collector acepta un callback opcional `context.reportProgress(percent,
+metadata)`. **Si `options.enrich` está activo, el mismo callback también se invoca durante
+la fase de enriquecimiento Reve que corre después** — antes de esto, `reportProgress` solo
+cubría la descarga de DGT, así que una UI que dependa de él se quedaba "parada en el 100%"
+mientras el barrido de Reve (hasta ~582 peticiones secuenciales con `source: 'public'`)
+seguía corriendo en silencio. Usa `metadata.stage` para distinguir las dos fases — son dos
+barridos 0→100 independientes sobre el mismo callback, no un único número continuo (ver
+ejemplo de valores arriba). Si tu UI quiere una única barra combinada, pondera cada fase tú
+mismo usando `stage` (p. ej. DGT = 0-50% de la barra combinada, Reve = 50-100%) — la
+librería no reescala los números por su cuenta, así que quien no use `enrich` sigue viendo
+exactamente el 5/35/70/100 de siempre.
 
 ---
 

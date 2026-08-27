@@ -113,19 +113,22 @@ async function enrichStationsPublic(stations, options = {}) {
     filters = {},
     perPage = 25,
     maxPages = DEFAULT_MAX_PAGES,
+    reportProgress,
   } = options;
+  const emitProgress = typeof reportProgress === 'function' ? reportProgress : () => {};
 
   const reveClient = createRevePublicClient({ httpClient, logger, acknowledgeUnsupported });
   const dgt = buildDgtIndices(stations);
 
   logger.info('Requesting Reve public locations sweep', { maxPages, perPage });
+  emitProgress(0, { stage: 'reve_public_locations_sweep' });
 
   const bestMatches = new Map();
   let fetched = 0;
   let kept = 0;
 
   try {
-    for await (const page of reveClient.streamLocations({ filters, perPage, maxPages })) {
+    for await (const page of reveClient.streamLocations({ filters, perPage, maxPages, reportProgress })) {
       for (const loc of page) {
         fetched += 1;
 
@@ -173,10 +176,12 @@ async function enrichStationsPublic(stations, options = {}) {
       status: error.response?.status,
       responseBody: error.response?.data,
     });
+    emitProgress(100, { stage: 'reve_public_locations_sweep', failed: true });
     return stations;
   }
 
   logger.info('Reve public locations sweep complete', { fetched, kept });
+  emitProgress(100, { stage: 'reve_public_locations_sweep', fetched, kept });
 
   const enriched = [];
   let matched = 0;
@@ -213,6 +218,7 @@ async function enrichStationsPublic(stations, options = {}) {
     withPrices: enriched.filter((s) => s.prices).length,
     withAvailability: enriched.filter((s) => s.availability).length,
   });
+  emitProgress(100, { stage: 'reve_public_enrichment_complete', matched });
 
   return enriched;
 }

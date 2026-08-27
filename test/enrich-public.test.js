@@ -242,6 +242,48 @@ test('enrichStationsPublic walks every page of the dataset by default (no cap, n
   assert.equal(enriched[0].reveLocationId, 'reve-pub-3');
 });
 
+test('enrichStationsPublic reports progress per page instead of jumping straight from 0 to 100', async () => {
+  const pages = {
+    1: samplePublicLocation({ id: 'reve-pub-1', coordinates: { latitude: '40.0', longitude: '-3.0' } }),
+    2: samplePublicLocation({ id: 'reve-pub-2', coordinates: { latitude: '41.0', longitude: '-4.0' } }),
+    3: samplePublicLocation({ id: 'reve-pub-3', coordinates: { latitude: '42.0', longitude: '-5.0' } }),
+  };
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      const loc = pages[page];
+      return {
+        status: 200,
+        data: { data: loc ? [loc] : [], pagination: { page, per_page: 1, total_pages: 3, total_count: 3 } },
+      };
+    },
+  };
+
+  const progressCalls = [];
+  const stations = [
+    { sourceStationId: 'dgt-1', location: { type: 'Point', coordinates: [-5.0, 42.0] }, prices: undefined, availability: undefined },
+  ];
+
+  await enrichStationsPublic(stations, {
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    thresholdMeters: 5000,
+    reportProgress: (percent, meta) => progressCalls.push({ percent, meta }),
+  });
+
+  // One call per page fetched (33/66/99 for a 3-page sweep) plus the initial 0 and the
+  // final 100 once the sweep is done — not just a single jump from 0 straight to 100 that
+  // would look "stuck" while 582 real pages are being fetched one by one.
+  const sweepCalls = progressCalls.filter((c) => c.meta.stage === 'reve_public_locations_sweep');
+  assert.ok(sweepCalls.length >= 4, `expected progress during the sweep, got ${JSON.stringify(sweepCalls)}`);
+  assert.equal(sweepCalls[0].percent, 0);
+  assert.equal(sweepCalls.at(-1).percent, 100);
+  const midCall = sweepCalls.find((c) => c.meta.page === 2);
+  assert.ok(midCall, 'expected a progress event tied to page 2');
+  assert.equal(midCall.percent, 67);
+});
+
 test('enrichStationsPublic always restarts at page 1 (no cache/cursor between calls)', async () => {
   const capturedPages = [];
   const fakeHttpClient = {
