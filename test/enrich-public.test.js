@@ -416,3 +416,58 @@ test('enrichStationsPublic discards Reve locations that are neither a name nor a
   assert.equal(sweepLog.meta.fetched, 201);
   assert.equal(sweepLog.meta.kept, 1, 'only the one geographically/nominally relevant location should be kept');
 });
+
+test('enrichStationsPublic keeps only the best candidate per station even when many pass the proximity filter (bounded memory under a high keep ratio)', async () => {
+  // A loose threshold plus dense-ish coverage means MOST incoming locations pass the
+  // proximity filter (this is the real production shape: national DGT density means a
+  // high fraction of Reve locations are "kept" candidates). Regardless of how many are
+  // kept, only the single best (closest) one per station may remain resident at a time —
+  // worse candidates must be evicted immediately, not accumulated.
+  // The SpatialIndex only scans the 3x3 grid neighborhood around a point (cellSize
+  // ~111m), so candidates must stay within that reach for the proximity filter to see
+  // them at all — spread these ~0.56m apart, topping out at ~56m, well inside both the
+  // grid's search radius and the thresholdMeters below.
+  const candidates = Array.from({ length: 100 }, (_, i) =>
+    samplePublicLocation({
+      id: `reve-cand-${i}`,
+      name: `Candidate ${i}`,
+      coordinates: { latitude: String(0.000005 * (i + 1)), longitude: '0' },
+    }),
+  );
+  // The true nearest candidate is placed last in arrival order, and a worse one first —
+  // proves the final match isn't just "whatever arrived first/last" but the actual best.
+  const ordered = [...candidates.slice(1), candidates[0]];
+
+  const fakeHttpClient = {
+    post: async () => ({
+      status: 200,
+      data: { data: ordered, pagination: { page: 1, per_page: ordered.length, total_pages: 1, total_count: ordered.length } },
+    }),
+  };
+
+  const infoLogs = [];
+  const logger = { ...silentLogger, info: (msg, meta) => infoLogs.push({ msg, meta }) };
+
+  const stations = [
+    { sourceStationId: 'dgt-1', location: { type: 'Point', coordinates: [0, 0] }, prices: undefined, availability: undefined },
+  ];
+
+  const result = await enrichStationsPublic(stations, {
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger,
+    thresholdMeters: 100,
+  });
+
+  assert.equal(result[0].reveLocationId, 'reve-cand-0', 'the closest candidate must win regardless of arrival order');
+
+  const sweepLog = infoLogs.find((l) => l.msg === 'Reve public locations sweep complete');
+  assert.equal(sweepLog.meta.fetched, 100);
+  // Normalizing (parsing the full nested evses/connectors/tariffs payload) is deferred
+  // until a candidate is actually about to become a station's new best match — a
+  // candidate that is already worse than what's held is skipped before ever being
+  // normalized. With 99 candidates arriving worse-first and the true best arriving last,
+  // only 2 ever get normalized (the initial best, then the true best that replaces it) —
+  // nowhere near the 100 that merely passed the coarse coordinate-only proximity check.
+  assert.equal(sweepLog.meta.kept, 2);
+});

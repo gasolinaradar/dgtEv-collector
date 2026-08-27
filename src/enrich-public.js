@@ -76,20 +76,25 @@ function mergePublicAvailability(reveLoc) {
 
 function buildDgtIndices(stations) {
   const spatialIndex = new SpatialIndex();
-  const names = new Set();
+  const nameIndex = new Map();
+  const stationCoords = [];
 
-  for (const station of stations) {
+  stations.forEach((station, idx) => {
     const coords = station.location?.coordinates;
-    if (!coords || !Array.isArray(coords) || coords.length !== 2) continue;
+    if (!coords || !Array.isArray(coords) || coords.length !== 2) return;
 
     const [lon, lat] = coords;
-    spatialIndex.insert(true, lat, lon);
+    spatialIndex.insert(idx, lat, lon);
+    stationCoords[idx] = { lat, lon };
 
     const key = normalizeStationName(station.name);
-    if (key) names.add(key);
-  }
+    if (key) {
+      if (!nameIndex.has(key)) nameIndex.set(key, []);
+      nameIndex.get(key).push(idx);
+    }
+  });
 
-  return { spatialIndex, names };
+  return { spatialIndex, nameIndex, stationCoords };
 }
 
 async function enrichStationsPublic(stations, options = {}) {
@@ -108,8 +113,7 @@ async function enrichStationsPublic(stations, options = {}) {
 
   logger.info('Requesting Reve public locations sweep', { maxPages, perPage });
 
-  const candidateSpatialIndex = new SpatialIndex();
-  const candidateNameIndex = new Map();
+  const bestMatches = new Map();
   let fetched = 0;
   let kept = 0;
 
@@ -123,19 +127,37 @@ async function enrichStationsPublic(stations, options = {}) {
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
 
         const nameKey = normalizeStationName(loc.name);
-        const isNameCandidate = nameKey !== null && dgt.names.has(nameKey);
-        const isProximityCandidate = dgt.spatialIndex.findNearest(lat, lon, thresholdMeters) !== null;
-        if (!isNameCandidate && !isProximityCandidate) continue;
+        const nameStationIndices = nameKey ? dgt.nameIndex.get(nameKey) : undefined;
+        const nearbyStations = dgt.spatialIndex.findAllWithin(lat, lon, thresholdMeters);
+        if (!nameStationIndices && nearbyStations.length === 0) continue;
 
-        const normalized = normalizeRevePublicLocation(loc);
-        if (!normalized) continue;
+        let normalized = null;
+        const ensureNormalized = () => {
+          if (normalized === null) normalized = normalizeRevePublicLocation(loc) || false;
+          return normalized || null;
+        };
 
-        kept += 1;
-        candidateSpatialIndex.insert(normalized, normalized.lat, normalized.lon);
-        if (nameKey) {
-          if (!candidateNameIndex.has(nameKey)) candidateNameIndex.set(nameKey, []);
-          candidateNameIndex.get(nameKey).push(normalized);
+        if (nameStationIndices) {
+          for (const idx of nameStationIndices) {
+            const stationCoord = dgt.stationCoords[idx];
+            const distance = haversineMeters(stationCoord.lat, stationCoord.lon, lat, lon);
+            const current = bestMatches.get(idx);
+            const better = !current || current.matchedBy !== 'name' || distance < current.distance;
+            if (!better) continue;
+            const n = ensureNormalized();
+            if (n) bestMatches.set(idx, { reve: n, matchedBy: 'name', distance });
+          }
         }
+
+        for (const { item: idx, distance } of nearbyStations) {
+          const current = bestMatches.get(idx);
+          if (current && current.matchedBy === 'name') continue;
+          if (current && distance >= current.distance) continue;
+          const n = ensureNormalized();
+          if (n) bestMatches.set(idx, { reve: n, matchedBy: 'proximity', distance });
+        }
+
+        if (normalized) kept += 1;
       }
     }
   } catch (error) {
@@ -154,53 +176,18 @@ async function enrichStationsPublic(stations, options = {}) {
   let matchedByName = 0;
   let matchedByProximity = 0;
 
-  for (const station of stations) {
-    const coords = station.location?.coordinates;
-    if (!coords || !Array.isArray(coords) || coords.length !== 2) {
+  stations.forEach((station, idx) => {
+    const best = bestMatches.get(idx);
+    if (!best) {
       enriched.push(station);
-      continue;
-    }
-
-    const [lon, lat] = coords;
-
-    let reve = null;
-    let matchedBy = null;
-    const nameKey = normalizeStationName(station.name);
-    const nameCandidates = nameKey ? candidateNameIndex.get(nameKey) : undefined;
-    if (nameCandidates?.length === 1) {
-      reve = nameCandidates[0];
-      matchedBy = 'name';
-    } else if (nameCandidates?.length > 1) {
-      let best = null;
-      let bestDist = Infinity;
-      for (const candidate of nameCandidates) {
-        const dist = haversineMeters(lat, lon, candidate.lat, candidate.lon);
-        if (dist < bestDist) {
-          bestDist = dist;
-          best = candidate;
-        }
-      }
-      reve = best;
-      matchedBy = 'name';
-    }
-
-    if (!reve) {
-      const hit = candidateSpatialIndex.findNearest(lat, lon, thresholdMeters);
-      if (hit) {
-        reve = hit.item;
-        matchedBy = 'proximity';
-      }
-    }
-
-    if (!reve) {
-      enriched.push(station);
-      continue;
+      return;
     }
 
     matched += 1;
-    if (matchedBy === 'name') matchedByName += 1;
+    if (best.matchedBy === 'name') matchedByName += 1;
     else matchedByProximity += 1;
 
+    const reve = best.reve;
     enriched.push({
       ...station,
       reveLocationId: reve.reveLocationId,
@@ -209,7 +196,7 @@ async function enrichStationsPublic(stations, options = {}) {
       availability: mergePublicAvailability(reve) || station.availability,
       reveData: reve.raw,
     });
-  }
+  });
 
   logger.info('Reve public-API enrichment complete', {
     totalStations: stations.length,

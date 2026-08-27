@@ -228,8 +228,8 @@ Reve public locations page N after retries — skipping it` (warn), `Reve public
 consecutive page failures — stopping sweep early` (warn), `Reve public API: stopped at
 maxPages (N) — dataset is partial` (warn, solo si `maxPages` explícito lo cortó),
 `Reve public locations sweep complete` (info, con `fetched, kept` — `fetched` es el total
-visto, `kept` el subconjunto que pasó el filtro geográfico/de nombre y se retuvo en
-memoria; ver sección 7 sobre memoria), `Building spatial index for Reve public locations`
+visto, `kept` cuántas se llegaron a parsear del todo en algún momento del barrido; ver
+sección 7 sobre memoria), `Building spatial index for Reve public locations`
 (info, con `count`), `Reve public-API enrichment complete` (info, con `totalStations,
 matched, matchedByName, matchedByProximity, withPrices, withAvailability`).
 
@@ -255,15 +255,20 @@ complete`) — trae el ratio `matched`/`totalStations` y cuántos quedaron con p
 - **`prices`/`availability` son agregados de todos los conectores de la ubicación Reve
   matcheada**, no filtrados por el tipo de conector concreto de la estación DGT.
 - **Memoria en `public`**: las ubicaciones se reciben en streaming, página a página, y se
-  descartan de inmediato salvo que sean candidatas (dentro de `thresholdMeters` de alguna
-  estación de entrada, o nombre exacto coincidente) — ya no se acumula nunca el dataset
-  completo de Reve en memoria (~14.500 ubicaciones con sus tarifas/EVSEs anidados, que en un
-  proceso con memoria justa puede agotar el heap de Node antes de terminar el barrido — esto
-  ya ocurrió una vez en PRE). El ratio real de filtrado (log `fetched` vs `kept`) depende de
-  cuánto se solapan geográfica/nominalmente tus estaciones de entrada con la cobertura de
-  Reve — no hay una garantía de techo fijo de memoria, solo una reducción respecto a
-  retenerlo todo. Si el proceso sigue muy limitado de memoria, combinar con un `maxPages`
-  menor por llamada o más memoria de contenedor.
+  emparejan contra las estaciones de entrada al vuelo — como máximo se retiene **una**
+  ubicación Reve por estación de entrada (su mejor coincidencia actual), y solo se parsea
+  del todo cuando va a sustituir a la que esa estación ya tenía guardada; el resto se
+  descarta o ni siquiera se parsea. Esto acota la memoria del conjunto de candidatos al
+  **número de estaciones de entrada**, no al volumen de ubicaciones Reve que pasan el filtro
+  (amplio, a nivel nacional) de `thresholdMeters`/nombre — una cantidad fija y conocida de
+  antemano, no una fracción variable del dataset completo de Reve (~14.500 ubicaciones con
+  sus tarifas/EVSEs anidados; el diseño anterior, que sí acumulaba todo lo que pasaba el
+  filtro sin límite mientras durara el barrido, es lo que agotó el heap de Node en PRE antes
+  de terminar). El log `fetched` vs `kept` sigue existiendo para ver cuánto trabajo hace el
+  emparejado, pero ya no representa memoria retenida simultáneamente. Aun así no es una
+  garantía absoluta: un proceso que ya vaya muy justo de memoria antes de arrancar el barrido
+  (por otro estado de la app, drivers de BD, etc.) puede seguir agotándola — si eso ocurre,
+  combinar con un `maxPages` menor por llamada o más memoria de contenedor.
 
 ---
 

@@ -71,6 +71,28 @@ class SpatialIndex {
 
     return bestDist <= maxMeters ? { item: bestItem, distance: bestDist } : null;
   }
+
+  findAllWithin(lat, lon, maxMeters) {
+    const neighbors = this._cellNeighbors(lat, lon);
+    const seen = new Set();
+    const results = [];
+
+    for (const key of neighbors) {
+      const indices = this.cells.get(key);
+      if (!indices) continue;
+      for (const idx of indices) {
+        if (seen.has(idx)) continue;
+        seen.add(idx);
+        const { item, lat: ilat, lon: ilon } = this.items[idx];
+        const dist = haversineMeters(lat, lon, ilat, ilon);
+        if (dist <= maxMeters) {
+          results.push({ item, distance: dist });
+        }
+      }
+    }
+
+    return results;
+  }
 }
 
 function normalizeReveLocation(loc) {
