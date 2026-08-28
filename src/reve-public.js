@@ -1,27 +1,11 @@
-// EXPERIMENTAL / UNSUPPORTED.
-//
-// This client talks to `https://www.mapareve.es/api/public/v1`, the internal API the
-// mapareve.es map itself uses in the browser — NOT the documented `/api/external/v1`
-// (see src/reve.js). It was reverse-engineered from the site's public JS bundle and a
-// handful of manual requests; it requires no API key and no documented rate limit was
-// observed, but:
-//
-//   - It is not published or supported by Red Eléctrica in any way.
-//   - It can change or disappear without notice.
-//   - Automated use outside a browser may fall outside the site's terms of use.
-//
-// Prefer `src/reve.js` (`/api/external/v1`) for anything that needs to keep working.
-// This module exists so the library can be evaluated against it in tests, not as a
-// recommended integration path — hence the explicit `acknowledgeUnsupported` gate below.
-
 const axios = require('axios');
 
 const REVE_PUBLIC_BASE_URL = 'https://www.mapareve.es/api/public/v1';
 const DEFAULT_TIMEOUT = 30000;
-const DEFAULT_RETRIES = 2;
-const DEFAULT_PAGE_SIZE = 50;
-// No documented rate limit exists for this endpoint. This delay between paginated
-// requests is a self-imposed courtesy throttle, not a requirement from Reve.
+const DEFAULT_RETRIES = 3;
+const DEFAULT_PAGE_SIZE = 25;
+const SPAIN_BBOX = { latitude_ne: 44, longitude_ne: 4.5, latitude_sw: 27, longitude_sw: -18.5 };
+const DEFAULT_MAX_PAGES = Number.MAX_SAFE_INTEGER;
 const DEFAULT_REQUEST_DELAY_MS = 150;
 
 function resolveHttpClient(httpClientOption) {
@@ -56,11 +40,15 @@ async function request(httpClient, method, endpoint, { params, data } = {}, opts
       return response.data;
     } catch (error) {
       const status = error?.response?.status;
-      // Only 429 is retried. A 403 here most likely means the Incapsula WAF challenged
-      // the request — retrying/evading that automatically is out of scope for this client.
-      if (status === 429 && attempt < retries) {
+      const isRetryable = !error.response || status === 429 || (status >= 500 && status < 600);
+      if (isRetryable && attempt < retries) {
         attempt += 1;
-        logger.warn(`Reve public API 429 on attempt ${attempt}, waiting ${delay / 1000}s`);
+        const reason = status ? `HTTP ${status}` : error.code || 'network error';
+        logger.warn(`Reve public API request failed (${reason}), retry ${attempt}/${retries} in ${delay / 1000}s`, {
+          endpoint,
+          status,
+          message: error.message,
+        });
         await sleep(delay);
         delay *= 2;
         continue;
@@ -77,29 +65,71 @@ function unwrapPaginated(body) {
   return { data: Array.isArray(body?.data) ? body.data : [], pagination: body?.pagination || null };
 }
 
-async function* streamLocations(httpClient, opts = {}) {
+async function* streamLocationPages(httpClient, opts = {}) {
   const {
     perPage = DEFAULT_PAGE_SIZE,
     filters = {},
     requestDelayMs = DEFAULT_REQUEST_DELAY_MS,
+    maxPages = DEFAULT_MAX_PAGES,
+    startPage = 1,
+    logger = console,
+    maxConsecutivePageFailures = 3,
+    reportProgress,
     ...rest
   } = opts;
+  const emitProgress = typeof reportProgress === 'function' ? reportProgress : () => {};
 
-  let page = 1;
-  let totalPages = 1;
+  let page = startPage;
+  let totalPages = null;
+  let pagesFetched = 0;
+  let consecutiveFailures = 0;
 
   for (;;) {
-    if (page > totalPages) break;
-    if (page > 1) await sleep(requestDelayMs);
+    if (totalPages !== null && page > totalPages) break;
+    if (pagesFetched >= maxPages) {
+      logger.warn(
+        `Reve public API: stopped at maxPages (${maxPages}) — dataset is partial. ` +
+          `Raise options.maxPages if you deliberately want more (each extra page is one request).`,
+      );
+      break;
+    }
+    if (pagesFetched > 0) await sleep(requestDelayMs);
 
-    const body = await request(
-      httpClient,
-      'post',
-      '/locations',
-      { data: filters, params: { page, per_page: perPage } },
-      rest,
-    );
+    logger.info(`Requesting Reve public locations page ${page}`, { page, perPage });
+    const requestStart = Date.now();
+
+    let body;
+    try {
+      body = await request(
+        httpClient,
+        'post',
+        '/locations',
+        { data: { ...SPAIN_BBOX, ...filters }, params: { page, per_page: perPage } },
+        { logger, ...rest },
+      );
+    } catch (error) {
+      consecutiveFailures += 1;
+      logger.warn(`Failed to fetch Reve public locations page ${page} after retries — skipping it`, {
+        page,
+        consecutiveFailures,
+        error: error.message,
+        status: error.response?.status,
+        responseBody: error.response?.data,
+      });
+      if (consecutiveFailures >= maxConsecutivePageFailures) {
+        logger.warn(
+          `Reve public API: ${consecutiveFailures} consecutive page failures — stopping sweep early`,
+          { lastAttemptedPage: page },
+        );
+        break;
+      }
+      page += 1;
+      continue;
+    }
+    consecutiveFailures = 0;
+
     const { data, pagination } = unwrapPaginated(body);
+    pagesFetched += 1;
 
     if (pagination?.total_pages) {
       totalPages = pagination.total_pages;
@@ -107,8 +137,23 @@ async function* streamLocations(httpClient, opts = {}) {
       totalPages = page;
     }
 
+    logger.info(`Received Reve public locations page ${page}`, {
+      page,
+      count: data.length,
+      ms: Date.now() - requestStart,
+      totalPages,
+      totalCount: pagination?.total_count,
+    });
+
+    emitProgress(totalPages ? Math.min(99, Math.round((page / totalPages) * 100)) : undefined, {
+      stage: 'reve_public_locations_sweep',
+      page,
+      totalPages,
+      totalCount: pagination?.total_count,
+    });
+
     if (data.length === 0) break;
-    yield data;
+    yield { data, page, totalPages };
     page += 1;
   }
 }
@@ -142,22 +187,50 @@ function createRevePublicClient(options = {}) {
         httpClient,
         'post',
         '/locations',
-        { data: filters, params: { page, per_page: perPage } },
+        { data: { ...SPAIN_BBOX, ...filters }, params: { page, per_page: perPage } },
         buildOpts(opts),
       );
       return unwrapPaginated(body);
     },
 
     async *streamLocations(opts = {}) {
-      yield* streamLocations(httpClient, buildOpts(opts));
+      for await (const { data } of streamLocationPages(httpClient, buildOpts(opts))) {
+        yield data;
+      }
     },
 
     async fetchAllLocations(opts = {}) {
       const results = [];
-      for await (const page of streamLocations(httpClient, buildOpts(opts))) {
-        results.push(...page);
+      for await (const { data } of streamLocationPages(httpClient, buildOpts(opts))) {
+        results.push(...data);
       }
       return results;
+    },
+
+    async fetchLocationsSweep(opts = {}) {
+      const built = buildOpts(opts);
+      const startPage = built.startPage ?? 1;
+      const locations = [];
+      let lastPage = null;
+      let totalPages = null;
+
+      for await (const pageResult of streamLocationPages(httpClient, built)) {
+        locations.push(...pageResult.data);
+        lastPage = pageResult.page;
+        totalPages = pageResult.totalPages;
+      }
+
+      if (lastPage === null) {
+        return { locations, totalPages, nextPage: startPage, completedSweep: false };
+      }
+
+      const reachedEnd = totalPages !== null && lastPage >= totalPages;
+      return {
+        locations,
+        totalPages,
+        nextPage: reachedEnd ? 1 : lastPage + 1,
+        completedSweep: reachedEnd,
+      };
     },
 
     async fetchMarkers(
@@ -203,4 +276,6 @@ function createRevePublicClient(options = {}) {
 module.exports = {
   createRevePublicClient,
   REVE_PUBLIC_BASE_URL,
+  SPAIN_BBOX,
+  DEFAULT_MAX_PAGES,
 };

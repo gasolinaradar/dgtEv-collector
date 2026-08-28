@@ -11,6 +11,7 @@ const {
   buildStatusMap,
   mergePrices,
   mergeAvailability,
+  mergeConnectorStatus,
   enrichStations,
 } = require('../src/enrich');
 const { createReveCache } = require('../src/cache');
@@ -163,6 +164,29 @@ test('buildTariffMap creates connector-to-tariffs mapping', () => {
   assert.equal(map['conn-1'][1].price, 0.05);
 });
 
+test('buildTariffMap carries restrictions through, so two components of the same type with different prices are distinguishable as separate bands, not duplicates', () => {
+  const data = [
+    {
+      connector_id: 'conn-1',
+      tariffs: [
+        {
+          id: 't1',
+          currency: 'EUR',
+          elements: [
+            { price_components: [{ type: 'PARKING_TIME', price: '0', step_size: 60 }], restrictions: { max_duration: 3600 } },
+            { price_components: [{ type: 'PARKING_TIME', price: '3', step_size: 60 }] },
+          ],
+        },
+      ],
+    },
+  ];
+
+  const map = buildTariffMap(data);
+  assert.equal(map['conn-1'].length, 2);
+  assert.deepEqual(map['conn-1'][0].restrictions, { max_duration: 3600 });
+  assert.equal(map['conn-1'][1].restrictions, undefined);
+});
+
 test('buildStatusMap creates evse-to-status mapping from boolean format', () => {
   const data = [
     { evse_id: 'evse-1', operational_status: true, last_operational_status_updated: '2026-01-01T00:00:00Z' },
@@ -187,8 +211,7 @@ test('buildStatusMap uses status field from EvseStatus when available', () => {
   assert.equal(map['evse-3'].status, 'AVAILABLE');
 });
 
-test('mergePrices returns tariffs from Reve connectors', () => {
-  const dgtConnectors = [{ type: 'IEC_62196_T2' }];
+test('mergePrices returns tariffs from Reve connectors, tagged with evseId/connectorId', () => {
   const reveConnectors = [
     { connectorId: 'conn-1', evseId: 'evse-1', standard: 'IEC_62196_T2' },
   ];
@@ -196,15 +219,50 @@ test('mergePrices returns tariffs from Reve connectors', () => {
     'conn-1': [{ type: 'ENERGY', price: 0.35, currency: 'EUR', stepSize: 1 }],
   };
 
-  const prices = mergePrices(dgtConnectors, reveConnectors, tariffMap);
+  const prices = mergePrices(reveConnectors, tariffMap);
   assert.ok(prices);
   assert.equal(prices.length, 1);
   assert.equal(prices[0].price, 0.35);
+  assert.equal(prices[0].evseId, 'evse-1');
+  assert.equal(prices[0].connectorId, 'conn-1');
+});
+
+test('mergePrices carries restrictions through to the final price entries', () => {
+  const reveConnectors = [{ connectorId: 'conn-1', evseId: 'evse-1', standard: 'IEC_62196_T2' }];
+  const tariffMap = {
+    'conn-1': [
+      { type: 'PARKING_TIME', price: 0, currency: 'EUR', restrictions: { max_duration: 3600 } },
+      { type: 'PARKING_TIME', price: 3, currency: 'EUR' },
+    ],
+  };
+
+  const prices = mergePrices(reveConnectors, tariffMap);
+  assert.equal(prices.length, 2);
+  assert.deepEqual(prices[0].restrictions, { max_duration: 3600 });
+  assert.equal(prices[1].restrictions, undefined);
 });
 
 test('mergePrices returns undefined when no tariffs', () => {
-  const prices = mergePrices([], [], {});
+  const prices = mergePrices([], {});
   assert.equal(prices, undefined);
+});
+
+test('mergePrices does not dedup identical tariffs across different connectors, so each price stays traceable to its own connector', () => {
+  const reveConnectors = [
+    { connectorId: 'conn-1', evseId: 'evse-1', standard: 'IEC_62196_T2' },
+    { connectorId: 'conn-2', evseId: 'evse-2', standard: 'IEC_62196_T2' },
+  ];
+  const tariffMap = {
+    'conn-1': [{ type: 'ENERGY', price: 0.35, currency: 'EUR', stepSize: 1 }],
+    'conn-2': [{ type: 'ENERGY', price: 0.35, currency: 'EUR', stepSize: 1 }],
+  };
+
+  const prices = mergePrices(reveConnectors, tariffMap);
+  assert.equal(prices.length, 2);
+  assert.deepEqual(
+    prices.map((p) => p.connectorId).sort(),
+    ['conn-1', 'conn-2'],
+  );
 });
 
 test('mergeAvailability returns most severe status', () => {
@@ -223,6 +281,90 @@ test('mergeAvailability returns most severe status', () => {
 test('mergeAvailability returns undefined for empty evses', () => {
   assert.equal(mergeAvailability([], {}), undefined);
   assert.equal(mergeAvailability(undefined, {}), undefined);
+});
+
+test('mergeAvailability includes a per-EVSE breakdown with connector power/type/id', () => {
+  const evses = [
+    {
+      id: 'evse-slow',
+      connectors: [{ id: 'conn-slow', standard: 'IEC_62196_T2', power_type: 'AC_3_PHASE', max_electric_power: 22000 }],
+    },
+    {
+      id: 'evse-fast',
+      connectors: [{ id: 'conn-fast', standard: 'IEC_62196_T2_COMBO', power_type: 'DC', max_electric_power: 150000 }],
+    },
+  ];
+  const statusMap = {
+    'evse-slow': { status: 'AVAILABLE' },
+    'evse-fast': { status: 'OUTOFORDER' },
+  };
+
+  const result = mergeAvailability(evses, statusMap);
+  assert.equal(result.evses.length, 2);
+
+  const slow = result.evses.find((e) => e.evseId === 'evse-slow');
+  assert.equal(slow.status, 'AVAILABLE');
+  assert.equal(slow.connectors[0].maxPowerW, 22000);
+  // Same connectorId a price entry for this connector would carry (mergePrices) — this is
+  // the join key that relates availability and prices back to one physical connector.
+  assert.equal(slow.connectors[0].connectorId, 'conn-slow');
+
+  const fast = result.evses.find((e) => e.evseId === 'evse-fast');
+  assert.equal(fast.status, 'OUTOFORDER');
+  assert.equal(fast.connectors[0].maxPowerW, 150000);
+  assert.equal(fast.connectors[0].connectorId, 'conn-fast');
+});
+
+test('mergeConnectorStatus matches DGT connectors to their Reve EVSE status by type + power, duplicates included', () => {
+  // Reproduces a real station: 3 connector types duplicated x2 in `connectors[]` (DGT), but a
+  // single EVSE in Reve reporting only one of each — every duplicate should still resolve to
+  // that EVSE's status, and the kW-vs-W rounding (43.7kW vs 43470W) should not block the match.
+  const dgtConnectors = [
+    { type: 'iec62196T2', maxPowerKw: 43.7 },
+    { type: 'iec62196T2COMBO', maxPowerKw: 50 },
+    { type: 'chademo', maxPowerKw: 50 },
+    { type: 'iec62196T2', maxPowerKw: 43.7 },
+    { type: 'iec62196T2COMBO', maxPowerKw: 50 },
+    { type: 'chademo', maxPowerKw: 50 },
+  ];
+  const evseDetails = [
+    {
+      evseId: 'ES*REP*E10477*1',
+      status: 'OUTOFORDER',
+      connectors: [
+        { standard: 'CHADEMO', maxPowerW: 50000 },
+        { standard: 'IEC_62196_T2', maxPowerW: 43470 },
+        { standard: 'IEC_62196_T2_COMBO', maxPowerW: 50000 },
+      ],
+    },
+  ];
+
+  const result = mergeConnectorStatus(dgtConnectors, evseDetails);
+  assert.equal(result.length, 6);
+  for (const conn of result) {
+    assert.equal(conn.status, 'OUTOFORDER');
+    assert.equal(conn.evseId, 'ES*REP*E10477*1');
+  }
+});
+
+test('mergeConnectorStatus leaves a connector untouched when it matches EVSEs that disagree on status', () => {
+  const dgtConnectors = [{ type: 'iec62196T2', maxPowerKw: 22 }];
+  const evseDetails = [
+    { evseId: 'evse-a', status: 'AVAILABLE', connectors: [{ standard: 'IEC_62196_T2', maxPowerW: 22000 }] },
+    { evseId: 'evse-b', status: 'OUTOFORDER', connectors: [{ standard: 'IEC_62196_T2', maxPowerW: 22000 }] },
+  ];
+
+  const result = mergeConnectorStatus(dgtConnectors, evseDetails);
+  assert.equal(result[0].status, undefined);
+  assert.equal(result[0].evseId, undefined);
+});
+
+test('mergeConnectorStatus leaves a connector untouched when its DGT type has no known OCPI equivalent', () => {
+  const dgtConnectors = [{ type: 'someUnmappedType', maxPowerKw: 22 }];
+  const evseDetails = [{ evseId: 'evse-a', status: 'AVAILABLE', connectors: [{ standard: 'IEC_62196_T2', maxPowerW: 22000 }] }];
+
+  const result = mergeConnectorStatus(dgtConnectors, evseDetails);
+  assert.deepEqual(result[0], { type: 'someUnmappedType', maxPowerKw: 22 });
 });
 
 test('enrichStations returns original when no API key', async () => {
@@ -344,6 +486,59 @@ test('enrichStations matches DGT stations to Reve by proximity', async () => {
   assert.equal(result[0].operator.name, 'Wenea');
 });
 
+test('enrichStations annotates connectors[] with the matched EVSE status end-to-end', async () => {
+  const stations = [
+    {
+      sourceStationId: 'dgt-1',
+      name: 'Test Station',
+      location: { type: 'Point', coordinates: [-3.7038, 40.4168] },
+      connectors: [{ type: 'iec62196T2', maxPowerKw: 22 }],
+      prices: undefined,
+      availability: undefined,
+    },
+  ];
+
+  const fakeHttpClient = {
+    get: async (url) => {
+      if (url.includes('/evses/operational_status')) {
+        return { status: 200, data: [{ evse_id: 'evse-1', status: 'CHARGING' }], headers: { 'total-count': '1', 'total-pages': '1' } };
+      }
+      if (url.includes('/connectors/tariffs')) {
+        return { status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } };
+      }
+      if (url.includes('/locations')) {
+        return {
+          status: 200,
+          data: [
+            {
+              id: 'reve-1',
+              coordinates: { latitude: '40.4168', longitude: '-3.7038' },
+              evses: [
+                {
+                  id: 'evse-1',
+                  connectors: [{ id: 'conn-1', standard: 'IEC_62196_T2', max_electric_power: 22000 }],
+                },
+              ],
+            },
+          ],
+          headers: { 'total-count': '1', 'total-pages': '1' },
+        };
+      }
+      return { status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } };
+    },
+  };
+
+  const result = await enrichStations(stations, {
+    reveApiKey: 'test-key',
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    thresholdMeters: 100,
+  });
+
+  assert.equal(result[0].connectors[0].status, 'CHARGING');
+  assert.equal(result[0].connectors[0].evseId, 'evse-1');
+});
+
 test('enrichStations fetches locations before status/tariffs (locations get priority for the shared rate limit)', async () => {
   const callOrder = [];
   const fakeHttpClient = {
@@ -365,6 +560,29 @@ test('enrichStations fetches locations before status/tariffs (locations get prio
     callOrder,
     ['locations', 'status', 'tariffs'],
     'sin locations no puede haber match pase lo que pase con status/tariffs, así que van primero',
+  );
+});
+
+test('enrichStations reports coarse progress across its locations/status/tariffs stages', async () => {
+  const fakeHttpClient = {
+    get: async () => ({ status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } }),
+  };
+
+  const progressCalls = [];
+  await enrichStations([], {
+    reveApiKey: 'test-key',
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    reportProgress: (percent, meta) => progressCalls.push({ percent, meta }),
+  });
+
+  assert.deepEqual(
+    progressCalls.map((c) => c.percent),
+    [0, 40, 70, 90, 100],
+  );
+  assert.deepEqual(
+    progressCalls.map((c) => c.meta.stage),
+    ['reve_locations', 'reve_locations', 'reve_status', 'reve_tariffs', 'reve_enrichment_complete'],
   );
 });
 

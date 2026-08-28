@@ -2,4 +2,6 @@ node_modules/
 *.tgz
 coverage/
 npm-debug.log*
+*.ndjson
+*.ndjson.meta.json
 .npmrc

@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { createRevePublicClient, REVE_PUBLIC_BASE_URL } = require('../src/reve-public');
+const { createRevePublicClient, REVE_PUBLIC_BASE_URL, DEFAULT_MAX_PAGES } = require('../src/reve-public');
 
 const silentLogger = { info: () => {}, warn: () => {}, debug: () => {} };
 
@@ -74,6 +74,49 @@ test('fetchLocationsPage POSTs filters as body and page/per_page as params', asy
   assert.equal(result.pagination.total_pages, 1);
 });
 
+test('fetchLocationsPage defaults to a full-Spain bbox — POST /locations 400s without one', async () => {
+  let capturedData;
+  const fakeHttpClient = {
+    post: async (url, data) => {
+      capturedData = data;
+      return { status: 200, data: { data: [], pagination: { page: 1, per_page: 10, total_pages: 1, total_count: 0 } } };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  await client.fetchLocationsPage();
+  assert.equal(capturedData.latitude_ne, 44);
+  assert.equal(capturedData.longitude_ne, 4.5);
+  assert.equal(capturedData.latitude_sw, 27);
+  assert.equal(capturedData.longitude_sw, -18.5);
+});
+
+test('fetchLocationsPage lets filters override the default bbox', async () => {
+  let capturedData;
+  const fakeHttpClient = {
+    post: async (url, data) => {
+      capturedData = data;
+      return { status: 200, data: { data: [], pagination: { page: 1, per_page: 10, total_pages: 1, total_count: 0 } } };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  await client.fetchLocationsPage({ filters: { latitude_ne: 40.6, latitude_sw: 40.3 } });
+  assert.equal(capturedData.latitude_ne, 40.6);
+  assert.equal(capturedData.latitude_sw, 40.3);
+  assert.equal(capturedData.longitude_ne, 4.5); // untouched default
+});
+
 test('fetchAllLocations paginates using body pagination.total_pages', async () => {
   let calls = 0;
   const fakeHttpClient = {
@@ -115,6 +158,145 @@ test('fetchAllLocations stops when a short page has no total_pages hint', async 
 
   const locations = await client.fetchAllLocations({ perPage: 5, requestDelayMs: 0 });
   assert.equal(locations.length, 2);
+});
+
+test('fetchAllLocations stops at maxPages even if the server claims more pages exist', async () => {
+  let calls = 0;
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      calls += 1;
+      const page = config.params.page;
+      // Server claims 2000 total pages (~20,000 locations) — a full-Spain-sized sweep.
+      return {
+        status: 200,
+        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: 2000, total_count: 20000 } },
+      };
+    },
+  };
+
+  const warnings = [];
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: { ...silentLogger, warn: (msg) => warnings.push(msg) },
+  });
+
+  const locations = await client.fetchAllLocations({ maxPages: 3, requestDelayMs: 0 });
+  assert.equal(calls, 3, 'must not fetch more than maxPages pages');
+  assert.equal(locations.length, 3);
+  assert.ok(warnings.some((w) => w.includes('maxPages')), 'should warn that the dataset is partial');
+});
+
+test('DEFAULT_MAX_PAGES represents no real cap — the live total_pages is what stops a sweep', () => {
+  assert.ok(DEFAULT_MAX_PAGES > 100000);
+});
+
+test('fetchAllLocations walks every page the server reports without an explicit maxPages', async () => {
+  let calls = 0;
+  const totalPages = 7;
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      calls += 1;
+      const page = config.params.page;
+      return {
+        status: 200,
+        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: totalPages, total_count: totalPages } },
+      };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  const locations = await client.fetchAllLocations({ requestDelayMs: 0 });
+  assert.equal(calls, totalPages, 'no default cap below the real total_pages');
+  assert.equal(locations.length, totalPages);
+});
+
+test('streamLocationPages reports progress as a percentage of total_pages, not just at the end', async () => {
+  const totalPages = 4;
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      return {
+        status: 200,
+        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: totalPages, total_count: totalPages } },
+      };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  const progressCalls = [];
+  await client.fetchAllLocations({
+    requestDelayMs: 0,
+    reportProgress: (percent, meta) => progressCalls.push({ percent, meta }),
+  });
+
+  assert.equal(progressCalls.length, totalPages, 'one progress event per page received');
+  assert.deepEqual(
+    progressCalls.map((c) => c.percent),
+    [25, 50, 75, 99],
+    'percent tracks page/total_pages, capped below 100 so the caller can signal the real 100 once fully done',
+  );
+  assert.equal(progressCalls[1].meta.page, 2);
+  assert.equal(progressCalls[1].meta.totalPages, totalPages);
+});
+
+test('fetchLocationsSweep resumes from startPage and reports nextPage when capped', async () => {
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      return {
+        status: 200,
+        data: { data: [{ id: `loc-${page}` }], pagination: { page, per_page: 10, total_pages: 1000, total_count: 10000 } },
+      };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  const result = await client.fetchLocationsSweep({ startPage: 51, maxPages: 3, requestDelayMs: 0 });
+  assert.equal(result.locations.length, 3);
+  assert.deepEqual(result.locations.map((l) => l.id), ['loc-51', 'loc-52', 'loc-53']);
+  assert.equal(result.nextPage, 54, 'should resume right after the last page fetched');
+  assert.equal(result.totalPages, 1000);
+  assert.equal(result.completedSweep, false);
+});
+
+test('fetchLocationsSweep wraps nextPage back to 1 when it reaches the last page', async () => {
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      const data_ = page <= 3 ? [{ id: `loc-${page}` }] : [];
+      return {
+        status: 200,
+        data: { data: data_, pagination: { page, per_page: 10, total_pages: 3, total_count: 3 } },
+      };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+  });
+
+  const result = await client.fetchLocationsSweep({ startPage: 1, maxPages: 50, requestDelayMs: 0 });
+  assert.equal(result.locations.length, 3);
+  assert.equal(result.nextPage, 1, 'a completed sweep should restart from page 1 next time');
+  assert.equal(result.completedSweep, true);
 });
 
 test('fetchMarkers sends bbox and zoom as the POST body', async () => {
@@ -236,4 +418,118 @@ test('does not retry on HTTP 403 (WAF block)', async () => {
 
   await assert.rejects(() => client.fetchLocation('loc-1'));
   assert.equal(attempts, 1);
+});
+
+test('does not retry on HTTP 400 (bad request — retrying it won\'t change the outcome)', async () => {
+  let attempts = 0;
+  const fakeHttpClient = {
+    get: async () => {
+      attempts += 1;
+      const err = new Error('Bad Request');
+      err.response = { status: 400, data: { status_message: 'per_page no tiene un valor válido' } };
+      throw err;
+    },
+  };
+
+  const client = createRevePublicClient({ acknowledgeUnsupported: true, httpClient: fakeHttpClient, logger: silentLogger });
+
+  await assert.rejects(() => client.fetchLocation('loc-1'));
+  assert.equal(attempts, 1);
+});
+
+test('retries on a timeout / network error (no error.response at all)', async () => {
+  let attempts = 0;
+  const fakeHttpClient = {
+    get: async () => {
+      attempts += 1;
+      if (attempts <= 2) {
+        const err = new Error('timeout of 30000ms exceeded');
+        err.code = 'ECONNABORTED';
+        throw err; // no err.response — this is what axios timeouts/network errors look like
+      }
+      return { status: 200, data: { id: 'loc-1' } };
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    retries: 3,
+  });
+
+  const loc = await client.fetchLocation('loc-1');
+  assert.equal(loc.id, 'loc-1');
+  assert.equal(attempts, 3);
+});
+
+test('retries on HTTP 5xx (transient server error)', async () => {
+  let attempts = 0;
+  const fakeHttpClient = {
+    get: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const err = new Error('Bad Gateway');
+        err.response = { status: 502 };
+        throw err;
+      }
+      return { status: 200, data: { id: 'loc-1' } };
+    },
+  };
+
+  const client = createRevePublicClient({ acknowledgeUnsupported: true, httpClient: fakeHttpClient, logger: silentLogger });
+
+  const loc = await client.fetchLocation('loc-1');
+  assert.equal(loc.id, 'loc-1');
+  assert.equal(attempts, 2);
+});
+
+test('fetchAllLocations skips a page that fails after retries instead of aborting the whole fetch', async () => {
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      if (page === 2) {
+        const err = new Error('Internal Server Error');
+        err.response = { status: 500 };
+        throw err;
+      }
+      const items = page <= 3 ? [{ id: `loc-${page}` }] : [];
+      return { status: 200, data: { data: items, pagination: { page, per_page: 1, total_pages: 3, total_count: 3 } } };
+    },
+  };
+
+  const warnings = [];
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: { ...silentLogger, warn: (msg) => warnings.push(msg) },
+    retries: 0, // fail page 2 immediately, no backoff wait, to keep the test fast
+  });
+
+  const locations = await client.fetchAllLocations({ requestDelayMs: 0 });
+  assert.deepEqual(locations.map((l) => l.id), ['loc-1', 'loc-3'], 'page 2 is skipped, pages 1 and 3 still come through');
+  assert.ok(warnings.some((w) => w.includes('page 2') && w.includes('skipping')));
+});
+
+test('fetchAllLocations stops early after too many consecutive page failures', async () => {
+  let calls = 0;
+  const fakeHttpClient = {
+    post: async () => {
+      calls += 1;
+      const err = new Error('Internal Server Error');
+      err.response = { status: 500 };
+      throw err;
+    },
+  };
+
+  const client = createRevePublicClient({
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    retries: 0,
+  });
+
+  const locations = await client.fetchAllLocations({ requestDelayMs: 0, maxConsecutivePageFailures: 3, maxPages: 1000 });
+  assert.deepEqual(locations, []);
+  assert.equal(calls, 3, 'stops after 3 consecutive page failures instead of trying maxPages times');
 });

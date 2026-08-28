@@ -71,6 +71,28 @@ class SpatialIndex {
 
     return bestDist <= maxMeters ? { item: bestItem, distance: bestDist } : null;
   }
+
+  findAllWithin(lat, lon, maxMeters) {
+    const neighbors = this._cellNeighbors(lat, lon);
+    const seen = new Set();
+    const results = [];
+
+    for (const key of neighbors) {
+      const indices = this.cells.get(key);
+      if (!indices) continue;
+      for (const idx of indices) {
+        if (seen.has(idx)) continue;
+        seen.add(idx);
+        const { item, lat: ilat, lon: ilon } = this.items[idx];
+        const dist = haversineMeters(lat, lon, ilat, ilon);
+        if (dist <= maxMeters) {
+          results.push({ item, distance: dist });
+        }
+      }
+    }
+
+    return results;
+  }
 }
 
 function normalizeReveLocation(loc) {
@@ -126,6 +148,15 @@ function normalizeReveLocation(loc) {
   };
 }
 
+// Un elemento de tarifa OCPI sin `restrictions` (u objeto vacío) se aplica siempre; con
+// `restrictions` (p. ej. `max_duration`, `start_time`/`end_time`) solo aplica bajo esas
+// condiciones — es lo que explica que un mismo connectorId tenga dos componentes del mismo
+// `type` con precios distintos (p. ej. PARKING_TIME a 0€ los primeros minutos y a 3€/min
+// después): no son un duplicado, son dos tramos.
+function hasRestrictions(restrictions) {
+  return !!restrictions && typeof restrictions === 'object' && Object.keys(restrictions).length > 0;
+}
+
 function buildTariffMap(tariffsData) {
   const map = {};
   for (const entry of tariffsData) {
@@ -144,6 +175,7 @@ function buildTariffMap(tariffsData) {
             currency: tariff.currency || 'EUR',
             vat: comp.vat ? parseFloat(comp.vat) : undefined,
             stepSize: comp.step_size,
+            restrictions: hasRestrictions(element.restrictions) ? element.restrictions : undefined,
           });
         }
       }
@@ -181,17 +213,25 @@ function buildStatusMap(statusData) {
   return map;
 }
 
-function mergePrices(dgtConnectors, reveConnectors, tariffMap) {
+// Tags every price component with the `evseId`/`connectorId` it came from, so a caller can
+// relate a given price back to a specific physical connector — same identifiers as
+// `evses[].connectors[].connectorId` in mergeAvailability's output below. Dedup is scoped to
+// each connector's own tariff list (a tariff can repeat the same component across several
+// time-based elements), NOT across connectors: two different physical connectors that happen
+// to share the same price are still two separate entries once each carries its own IDs —
+// collapsing them the way earlier versions did is what made it impossible to tell which price
+// applied to which connector in the first place.
+function mergePrices(reveConnectors, tariffMap) {
   if (!Array.isArray(reveConnectors) || reveConnectors.length === 0) return undefined;
 
   const prices = [];
-  const seen = new Set();
 
   for (const conn of reveConnectors) {
     const connectorId = conn.connectorId;
     const tariffs = tariffMap[connectorId];
     if (!tariffs || tariffs.length === 0) continue;
 
+    const seen = new Set();
     for (const tariff of tariffs) {
       const key = `${tariff.type}:${tariff.price}:${tariff.currency}`;
       if (seen.has(key)) continue;
@@ -202,6 +242,9 @@ function mergePrices(dgtConnectors, reveConnectors, tariffMap) {
         currency: tariff.currency,
         vat: tariff.vat,
         stepSize: tariff.stepSize,
+        restrictions: tariff.restrictions,
+        evseId: conn.evseId,
+        connectorId: conn.connectorId,
       });
     }
   }
@@ -209,14 +252,116 @@ function mergePrices(dgtConnectors, reveConnectors, tariffMap) {
   return prices.length > 0 ? prices : undefined;
 }
 
+// La DGT describe cada conector con su propio vocabulario (p. ej. `iec62196T2`,
+// `iec62196T2COMBO`, `chademo`), en camelCase, sin relación textual directa con el estándar
+// OCPI que usa Reve (`IEC_62196_T2`, `IEC_62196_T2_COMBO`, `CHADEMO`). Esta tabla solo cubre
+// los tipos de los que hay evidencia directa en datos reales o que son transcripciones
+// inequívocas del mismo estándar EAFO/DATEX II; un tipo de la DGT que no esté aquí
+// simplemente no se casa con nada y su conector se deja tal cual (sin `status`), en vez de
+// arriesgarse a adivinar mal.
+const DGT_TO_OCPI_CONNECTOR_TYPE = {
+  chademo: 'CHADEMO',
+  iec62196T1: 'IEC_62196_T1',
+  iec62196T1COMBO: 'IEC_62196_T1_COMBO',
+  iec62196T2: 'IEC_62196_T2',
+  iec62196T2COMBO: 'IEC_62196_T2_COMBO',
+  iec62196T3A: 'IEC_62196_T3A',
+  iec62196T3C: 'IEC_62196_T3C',
+  domesticA: 'DOMESTIC_A',
+  domesticB: 'DOMESTIC_B',
+  domesticC: 'DOMESTIC_C',
+  domesticD: 'DOMESTIC_D',
+  domesticE: 'DOMESTIC_E',
+  domesticF: 'DOMESTIC_F',
+  domesticG: 'DOMESTIC_G',
+  domesticH: 'DOMESTIC_H',
+  domesticI: 'DOMESTIC_I',
+  domesticJ: 'DOMESTIC_J',
+  domesticK: 'DOMESTIC_K',
+  domesticL: 'DOMESTIC_L',
+  domesticM: 'DOMESTIC_M',
+  domesticN: 'DOMESTIC_N',
+  domesticO: 'DOMESTIC_O',
+  gbtAc: 'GBT_AC',
+  gbtDc: 'GBT_DC',
+  pantographBottomUp: 'PANTOGRAPH_BOTTOM_UP',
+  pantographTopDown: 'PANTOGRAPH_TOP_DOWN',
+  tesla: 'TESLA_S',
+  teslaS: 'TESLA_S',
+  teslaR: 'TESLA_R',
+};
+
+// La potencia de la DGT viene en kW con un redondeo propio (43.7) y la de Reve en W tal cual
+// la reporta el EVSE (43470) — no siempre coinciden al convertir. Se admite un margen del 5%
+// (o 500W, lo que sea mayor) para no perder matches válidos por el redondeo, sin ser tan laxo
+// como para confundir potencias claramente distintas (22kW vs 50kW, por ejemplo).
+function powersMatch(maxPowerKw, maxPowerW) {
+  if (maxPowerKw === undefined || maxPowerW === undefined || maxPowerW === null) return false;
+  const expectedW = maxPowerKw * 1000;
+  const tolerance = Math.max(500, expectedW * 0.05);
+  return Math.abs(expectedW - maxPowerW) <= tolerance;
+}
+
+// Añade `status` (y `evseId` cuando no sea ambiguo) a cada conector de `connectors[]`
+// (inventario estático de la DGT) cruzándolo con `availability.evses[]` (estado en vivo de
+// Reve, por EVSE). El match es por tipo (vía DGT_TO_OCPI_CONNECTOR_TYPE) + potencia
+// (powersMatch): si un conector de la DGT casa con varios conectores de Reve que no están de
+// acuerdo en el estado, se deja sin tocar — mejor no anotar estado que anotar uno que podría
+// ser el de otro conector físico distinto.
+function mergeConnectorStatus(dgtConnectors, evseDetails) {
+  if (!Array.isArray(dgtConnectors) || dgtConnectors.length === 0) return dgtConnectors;
+  if (!Array.isArray(evseDetails) || evseDetails.length === 0) return dgtConnectors;
+
+  const reveConnectors = [];
+  for (const evse of evseDetails) {
+    for (const conn of Array.isArray(evse.connectors) ? evse.connectors : []) {
+      reveConnectors.push({ evseId: evse.evseId, status: evse.status, standard: conn.standard, maxPowerW: conn.maxPowerW });
+    }
+  }
+  if (reveConnectors.length === 0) return dgtConnectors;
+
+  return dgtConnectors.map((conn) => {
+    const ocpiType = DGT_TO_OCPI_CONNECTOR_TYPE[conn.type];
+    if (!ocpiType) return conn;
+
+    const matches = reveConnectors.filter(
+      (rc) => rc.standard === ocpiType && powersMatch(conn.maxPowerKw, rc.maxPowerW),
+    );
+    if (matches.length === 0) return conn;
+
+    const statuses = new Set(matches.map((m) => m.status));
+    if (statuses.size > 1) return conn;
+
+    const merged = { ...conn, status: matches[0].status };
+    const evseIds = new Set(matches.map((m) => m.evseId));
+    if (evseIds.size === 1) merged.evseId = matches[0].evseId;
+    return merged;
+  });
+}
+
+function summarizeConnectors(connectors) {
+  return (Array.isArray(connectors) ? connectors : []).map((conn) => ({
+    connectorId: conn.id,
+    standard: conn.standard,
+    powerType: conn.power_type,
+    maxPowerW: conn.max_electric_power,
+  }));
+}
+
 function mergeAvailability(evses, statusMap) {
   if (!Array.isArray(evses) || evses.length === 0) return undefined;
 
   const statuses = [];
+  const evseDetails = [];
   for (const evse of evses) {
     const st = statusMap[evse.id];
     if (st) {
       statuses.push(st.status);
+      evseDetails.push({
+        evseId: evse.id,
+        status: st.status,
+        connectors: summarizeConnectors(evse.connectors),
+      });
     }
   }
 
@@ -228,6 +373,7 @@ function mergeAvailability(evses, statusMap) {
         status: p,
         evseCount: statuses.length,
         lastUpdated: new Date().toISOString(),
+        evses: evseDetails,
       };
     }
   }
@@ -236,6 +382,7 @@ function mergeAvailability(evses, statusMap) {
     status: 'UNKNOWN',
     evseCount: statuses.length,
     lastUpdated: new Date().toISOString(),
+    evses: evseDetails,
   };
 }
 
@@ -248,11 +395,15 @@ async function enrichStations(stations, options = {}) {
     logger = console,
     dateFrom: dateFromOverride,
     onlyDynamicInfo,
+    reportProgress,
   } = options;
+  const emitProgress = typeof reportProgress === 'function' ? reportProgress : () => {};
 
   if (!reveApiKey) {
     return stations;
   }
+
+  emitProgress(0, { stage: 'reve_locations' });
 
   const reveClient = createReveClient({
     apiKey: reveApiKey,
@@ -305,6 +456,8 @@ async function enrichStations(stations, options = {}) {
     logger.warn('Failed to fetch Reve locations for matching', { error: error.message });
   }
 
+  emitProgress(40, { stage: 'reve_locations', count: fetchedLocations.length });
+
   // Con cache: el índice de matching se construye desde el histórico completo acumulado, no
   // solo desde lo fetcheado en este ciclo. Sin cache (p. ej. collector.enrich() puntual sin
   // cacheDir): no hay nada que acumular entre llamadas, así que se usa directamente lo recién
@@ -340,6 +493,8 @@ async function enrichStations(stations, options = {}) {
     }
   }
 
+  emitProgress(70, { stage: 'reve_status', count: statusData.length });
+
   logger.info('Fetching Reve tariffs', { dateFrom: tariffsDateFrom || 'full' });
   try {
     tariffsData = await reveClient.fetchTariffs({ dateFrom: tariffsDateFrom });
@@ -355,11 +510,13 @@ async function enrichStations(stations, options = {}) {
         tariffs: tariffs.map((t) => ({
           id: `${connectorId}:${t.type}`,
           currency: t.currency,
-          elements: [{ price_components: [{ type: t.type, price: String(t.price), step_size: t.stepSize }] }],
+          elements: [{ price_components: [{ type: t.type, price: String(t.price), step_size: t.stepSize }], restrictions: t.restrictions }],
         })),
       }));
     }
   }
+
+  emitProgress(90, { stage: 'reve_tariffs', count: tariffsData.length });
 
   if (cache) {
     const statusEntries = {};
@@ -374,30 +531,10 @@ async function enrichStations(stations, options = {}) {
     }
     cache.bulkUpdateStatus(statusEntries);
 
-    const tariffEntries = {};
-    for (const entry of tariffsData) {
-      if (entry.connector_id) {
-        const tariffs = Array.isArray(entry.tariffs) ? entry.tariffs : [];
-        const simplified = [];
-        for (const tariff of tariffs) {
-          const elements = Array.isArray(tariff.elements) ? tariff.elements : [];
-          for (const element of elements) {
-            const components = Array.isArray(element.price_components) ? element.price_components : [];
-            for (const comp of components) {
-              simplified.push({
-                type: comp.type,
-                price: parseFloat(comp.price) || 0,
-                currency: tariff.currency || 'EUR',
-                vat: comp.vat ? parseFloat(comp.vat) : undefined,
-                stepSize: comp.step_size,
-              });
-            }
-          }
-        }
-        tariffEntries[entry.connector_id] = simplified;
-      }
-    }
-    cache.bulkUpdateTariffs(tariffEntries);
+    // Misma lógica que buildTariffMap — reutilizarla en vez de duplicarla evita que las dos
+    // copias diverjan (como ya pasó: esta acumuló su propio bug de vat/restrictions perdidos
+    // que buildTariffMap no tenía).
+    cache.bulkUpdateTariffs(buildTariffMap(tariffsData));
   }
 
   // Igual que las ubicaciones: si hay cache, el matching usa el histórico completo acumulado
@@ -435,15 +572,16 @@ async function enrichStations(stations, options = {}) {
     matched += 1;
     const reve = hit.item;
 
-    const prices = mergePrices(station.connectors, reve.allConnectors, tariffMap);
-    const availability = mergeAvailability(reve.evses, statusMap);
+    const prices = mergePrices(reve.allConnectors, tariffMap);
+    const availability = mergeAvailability(reve.evses, statusMap) || station.availability;
 
     enriched.push({
       ...station,
       reveLocationId: reve.reveLocationId,
       operator: reve.operator || station.operator,
       prices: prices || station.prices,
-      availability: availability || station.availability,
+      availability,
+      connectors: availability?.evses ? mergeConnectorStatus(station.connectors, availability.evses) : station.connectors,
     });
   }
 
@@ -453,6 +591,7 @@ async function enrichStations(stations, options = {}) {
     withPrices: enriched.filter((s) => s.prices).length,
     withAvailability: enriched.filter((s) => s.availability).length,
   });
+  emitProgress(100, { stage: 'reve_enrichment_complete', matched });
 
   return enriched;
 }
@@ -466,6 +605,8 @@ module.exports = {
   buildStatusMap,
   mergePrices,
   mergeAvailability,
+  mergeConnectorStatus,
+  summarizeConnectors,
   DEFAULT_THRESHOLD_METERS,
   STATUS_PRIORITY,
 };

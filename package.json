@@ -1,6 +1,6 @@
 {
   "name": "@gasolinaradar/dgt-ev-collector",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Collector for the official DGT EV charging station dataset (Spain) returning normalized EV charging stations",
   "main": "src/index.js",
   "exports": {
@@ -25,7 +25,7 @@
     "url": "https://github.com/gasolinaradar/dgt-ev-collector/issues"
   },
   "scripts": {
-    "test": "node --test test/collector.test.js test/reve.test.js test/cache.test.js test/enrich.test.js test/reve-public.test.js test/enrich-experimental.test.js",
+    "test": "node --test test/collector.test.js test/reve.test.js test/cache.test.js test/enrich.test.js test/reve-public.test.js test/enrich-public.test.js test/reve-enrich.test.js",
     "test:live": "node --test test/live.test.js",
     "test:live-public": "node --test test/live-public.test.js",
     "test:live-compare": "node --test test/live-compare.test.js",
