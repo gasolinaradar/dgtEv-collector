@@ -27,14 +27,16 @@ function normalizeRevePublicLocation(loc) {
   };
 }
 
+// Same evseId/connectorId tagging as mergePrices in enrich.js, and same reasoning: dedup stays
+// scoped to each connector's own tariff list, not across connectors, so the IDs stay meaningful.
 function mergePublicPrices(reveLoc) {
   const evses = Array.isArray(reveLoc.raw?.evses) ? reveLoc.raw.evses : [];
-  const seen = new Set();
   const prices = [];
 
   for (const evse of evses) {
     const connectors = Array.isArray(evse.connectors) ? evse.connectors : [];
     for (const conn of connectors) {
+      const seen = new Set();
       for (const t of Array.isArray(conn.tariffs) ? conn.tariffs : []) {
         const tariff = t.tariff;
         if (!tariff) continue;
@@ -51,6 +53,8 @@ function mergePublicPrices(reveLoc) {
               currency,
               vat: comp.vat !== undefined && comp.vat !== null ? parseFloat(comp.vat) : undefined,
               stepSize: comp.step_size,
+              evseId: evse.evse_id,
+              connectorId: conn.id,
             });
           }
         }

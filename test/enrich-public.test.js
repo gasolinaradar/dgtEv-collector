@@ -71,12 +71,56 @@ test('normalizeRevePublicLocation returns null for invalid coordinates', () => {
   assert.equal(normalizeRevePublicLocation(loc), null);
 });
 
-test('mergePublicPrices dedupes identical price components across connectors', () => {
+test('mergePublicPrices tags each price with the evseId/connectorId it came from', () => {
   const reveLoc = normalizeRevePublicLocation(samplePublicLocation());
   const prices = mergePublicPrices(reveLoc);
   assert.equal(prices.length, 1);
   assert.equal(prices[0].type, 'ENERGY');
   assert.equal(prices[0].price, 0.48);
+  assert.equal(prices[0].evseId, 'ES*ACM*E000001*1');
+  assert.equal(prices[0].connectorId, 'conn-1');
+});
+
+test('mergePublicPrices does not dedup identical tariffs across different connectors, so each price stays traceable to its own connector', () => {
+  const reveLoc = normalizeRevePublicLocation(
+    samplePublicLocation({
+      evses: [
+        {
+          evse_id: 'evse-1',
+          status: 'AVAILABLE',
+          connectors: [
+            {
+              id: 'conn-a',
+              standard: 'IEC_62196_T2',
+              tariffs: [
+                { tariff: { currency: 'EUR', elements: [{ price_components: [{ type: 'ENERGY', price: 0.35, step_size: 1 }] }] } },
+              ],
+            },
+          ],
+        },
+        {
+          evse_id: 'evse-2',
+          status: 'AVAILABLE',
+          connectors: [
+            {
+              id: 'conn-b',
+              standard: 'IEC_62196_T2',
+              tariffs: [
+                { tariff: { currency: 'EUR', elements: [{ price_components: [{ type: 'ENERGY', price: 0.35, step_size: 1 }] }] } },
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+
+  const prices = mergePublicPrices(reveLoc);
+  assert.equal(prices.length, 2);
+  assert.deepEqual(
+    prices.map((p) => p.connectorId).sort(),
+    ['conn-a', 'conn-b'],
+  );
 });
 
 test('mergePublicAvailability picks the highest-priority status', () => {
@@ -118,10 +162,12 @@ test('mergePublicAvailability includes a per-EVSE breakdown with connector power
   const slow = availability.evses.find((e) => e.evseId === 'evse-slow-ok');
   assert.equal(slow.status, 'AVAILABLE');
   assert.equal(slow.connectors[0].maxPowerW, 22000);
+  assert.equal(slow.connectors[0].connectorId, 'c1');
 
   const fast = availability.evses.find((e) => e.evseId === 'evse-fast-broken');
   assert.equal(fast.status, 'OUTOFORDER');
   assert.equal(fast.connectors[0].maxPowerW, 150000);
+  assert.equal(fast.connectors[0].connectorId, 'c2');
 });
 
 test('enrichStationsPublic throws when acknowledgeUnsupported is missing', async () => {

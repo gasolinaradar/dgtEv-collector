@@ -203,17 +203,25 @@ function buildStatusMap(statusData) {
   return map;
 }
 
-function mergePrices(dgtConnectors, reveConnectors, tariffMap) {
+// Tags every price component with the `evseId`/`connectorId` it came from, so a caller can
+// relate a given price back to a specific physical connector — same identifiers as
+// `evses[].connectors[].connectorId` in mergeAvailability's output below. Dedup is scoped to
+// each connector's own tariff list (a tariff can repeat the same component across several
+// time-based elements), NOT across connectors: two different physical connectors that happen
+// to share the same price are still two separate entries once each carries its own IDs —
+// collapsing them the way earlier versions did is what made it impossible to tell which price
+// applied to which connector in the first place.
+function mergePrices(reveConnectors, tariffMap) {
   if (!Array.isArray(reveConnectors) || reveConnectors.length === 0) return undefined;
 
   const prices = [];
-  const seen = new Set();
 
   for (const conn of reveConnectors) {
     const connectorId = conn.connectorId;
     const tariffs = tariffMap[connectorId];
     if (!tariffs || tariffs.length === 0) continue;
 
+    const seen = new Set();
     for (const tariff of tariffs) {
       const key = `${tariff.type}:${tariff.price}:${tariff.currency}`;
       if (seen.has(key)) continue;
@@ -224,6 +232,8 @@ function mergePrices(dgtConnectors, reveConnectors, tariffMap) {
         currency: tariff.currency,
         vat: tariff.vat,
         stepSize: tariff.stepSize,
+        evseId: conn.evseId,
+        connectorId: conn.connectorId,
       });
     }
   }
@@ -233,6 +243,7 @@ function mergePrices(dgtConnectors, reveConnectors, tariffMap) {
 
 function summarizeConnectors(connectors) {
   return (Array.isArray(connectors) ? connectors : []).map((conn) => ({
+    connectorId: conn.id,
     standard: conn.standard,
     powerType: conn.power_type,
     maxPowerW: conn.max_electric_power,
@@ -483,7 +494,7 @@ async function enrichStations(stations, options = {}) {
     matched += 1;
     const reve = hit.item;
 
-    const prices = mergePrices(station.connectors, reve.allConnectors, tariffMap);
+    const prices = mergePrices(reve.allConnectors, tariffMap);
     const availability = mergeAvailability(reve.evses, statusMap);
 
     enriched.push({

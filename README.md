@@ -222,17 +222,17 @@ When enriched with Reve data (`enrich.reveApiKey`), the fields are populated:
   typeOfSite: 'onstreet',
   operator: { name: 'Wenea', website: 'www.wenea.es' },
   reveLocationId: 'reve-abc-123',
-  prices: [
-    { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1 },
-    { type: 'TIME', price: 0.02, currency: 'EUR', stepSize: 60 },
+  prices: [                // each entry tagged with the connector/EVSE it came from
+    { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
+    { type: 'TIME', price: 0.02, currency: 'EUR', stepSize: 60, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
   ],
   availability: {
     status: 'AVAILABLE',   // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | PLANNED | REMOVED | UNKNOWN
     evseCount: 2,
     lastUpdated: '2026-08-25T10:00:00Z',
     evses: [                // per-EVSE breakdown — e.g. "fast one is broken, slow one is free"
-      { evseId: 'ES*ACM*E1*1', status: 'AVAILABLE', connectors: [{ standard: 'IEC_62196_T2', powerType: 'AC_3_PHASE', maxPowerW: 22000 }] },
-      { evseId: 'ES*ACM*E1*2', status: 'OUTOFORDER', connectors: [{ standard: 'IEC_62196_T2_COMBO', powerType: 'DC', maxPowerW: 150000 }] },
+      { evseId: 'ES*ACM*E1*1', status: 'AVAILABLE', connectors: [{ connectorId: 'conn-1', standard: 'IEC_62196_T2', powerType: 'AC_3_PHASE', maxPowerW: 22000 }] },
+      { evseId: 'ES*ACM*E1*2', status: 'OUTOFORDER', connectors: [{ connectorId: 'conn-2', standard: 'IEC_62196_T2_COMBO', powerType: 'DC', maxPowerW: 150000 }] },
     ],
   },
 }
@@ -244,6 +244,12 @@ Notes / Notas:
 - Coordinates are `[longitude, latitude]` (GeoJSON order). Sites that cannot be resolved with coordinates are skipped (logged as warnings).
 - `prices`, `availability`, and `reveLocationId` are `undefined` until enrichment is enabled.
 - `typeOfSite`, `authenticationMethods`, and `operator` are extracted from DGT XML when present.
+- Every `prices[]` entry and every `availability.evses[].connectors[]` entry carries the same
+  `connectorId` (and `evseId`) when the underlying connector matches — that's the only reliable
+  way to relate a price to a specific physical connector/EVSE. The top-level `connectors` array
+  (parsed straight from DGT XML) has **no id of its own**, so it cannot be joined back to
+  `prices`/`availability` beyond a best-effort match on `type`/power — DGT's site XML doesn't
+  expose a stable per-connector identifier.
 
 ---
 

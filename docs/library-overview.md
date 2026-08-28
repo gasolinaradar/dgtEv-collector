@@ -116,8 +116,8 @@ hasta que se enriquece.
 
   // --- De Reve, solo si hay match tras enrichStations() ---
   reveLocationId: 'uuid-de-la-ubicacion-reve',
-  prices: [
-    { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1 },
+  prices: [               // cada entrada lleva el evseId/connectorId del conector Reve del que sale
+    { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1, evseId: 'ES*ACM*E000001*1', connectorId: 'conn-1' },
   ],
   availability: {
     status: 'AVAILABLE', // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | PLANNED | REMOVED | UNKNOWN
@@ -126,8 +126,8 @@ hasta que se enriquece.
     lastUpdated: '2026-08-26T10:00:00Z',
     evses: [               // desglose por EVSE — permite distinguir p. ej. "el rápido está roto,
                             // el lento libre" en vez de perder ese detalle en el status resumen
-      { evseId: 'ES*ACM*E000001*1', status: 'AVAILABLE', connectors: [{ standard: 'IEC_62196_T2', powerType: 'AC_3_PHASE', maxPowerW: 22000 }] },
-      { evseId: 'ES*ACM*E000001*2', status: 'OUTOFORDER', connectors: [{ standard: 'IEC_62196_T2_COMBO', powerType: 'DC', maxPowerW: 150000 }] },
+      { evseId: 'ES*ACM*E000001*1', status: 'AVAILABLE', connectors: [{ connectorId: 'conn-1', standard: 'IEC_62196_T2', powerType: 'AC_3_PHASE', maxPowerW: 22000 }] },
+      { evseId: 'ES*ACM*E000001*2', status: 'OUTOFORDER', connectors: [{ connectorId: 'conn-2', standard: 'IEC_62196_T2_COMBO', powerType: 'DC', maxPowerW: 150000 }] },
     ],
   },
 
@@ -141,8 +141,16 @@ hasta que se enriquece.
 }
 ```
 
-`prices` no distingue entre EVSEs/conectores concretos de la estación DGT — es el conjunto
-(deduplicado) de precios de **todos** los conectores de la ubicación Reve matcheada.
+Cada entrada de `prices` lleva `evseId`/`connectorId` — el mismo identificador que aparece en
+`availability.evses[].connectors[].connectorId` — así que sí se puede relacionar un precio con
+un conector físico concreto de la ubicación Reve. El deduplicado ahora es solo dentro de las
+tarifas de un mismo conector (un mismo elemento tarifario puede repetirse por franjas horarias),
+ya no colapsa entre conectores distintos como en versiones anteriores a `1.5.0-experimental.13`.
+
+Lo que sigue sin tener ID propio es el `connectors` de arriba, el de nivel superior parseado
+directo del XML de la DGT: ese array no trae ningún identificador de conector en el XML fuente,
+así que no se puede cruzar 1:1 con `prices`/`availability.evses` — como mucho, un matching por
+atributos (`type`/potencia), ambiguo cuando hay conectores duplicados del mismo tipo.
 
 `availability.status` es un resumen: el estado de mayor prioridad entre todos los EVSEs de
 la ubicación (significado de cada valor, estándar OCPI):
@@ -165,8 +173,9 @@ detrás de uno peor, pero por sí solo no dice cuántos EVSEs están en cada est
 conector (p. ej. si el punto rápido está averiado y solo queda libre el lento).
 
 Para eso está `availability.evses`: un desglose por EVSE con su `status` individual y el
-resumen de sus conectores (`standard`, `powerType`, `maxPowerW`), para poder distinguir en
-la UI "3 de 4 libres, el averiado es el rápido" en vez de depender solo del resumen.
+resumen de sus conectores (`connectorId`, `standard`, `powerType`, `maxPowerW`), para poder
+distinguir en la UI "3 de 4 libres, el averiado es el rápido" en vez de depender solo del
+resumen.
 `reveData` sigue disponible (solo fuente `public`) con el objeto crudo completo si hace
 falta bajar a un nivel de detalle que ni `evses` cubre (tarifas por conector, horarios,
 métodos de pago, etc.).

@@ -187,8 +187,7 @@ test('buildStatusMap uses status field from EvseStatus when available', () => {
   assert.equal(map['evse-3'].status, 'AVAILABLE');
 });
 
-test('mergePrices returns tariffs from Reve connectors', () => {
-  const dgtConnectors = [{ type: 'IEC_62196_T2' }];
+test('mergePrices returns tariffs from Reve connectors, tagged with evseId/connectorId', () => {
   const reveConnectors = [
     { connectorId: 'conn-1', evseId: 'evse-1', standard: 'IEC_62196_T2' },
   ];
@@ -196,15 +195,35 @@ test('mergePrices returns tariffs from Reve connectors', () => {
     'conn-1': [{ type: 'ENERGY', price: 0.35, currency: 'EUR', stepSize: 1 }],
   };
 
-  const prices = mergePrices(dgtConnectors, reveConnectors, tariffMap);
+  const prices = mergePrices(reveConnectors, tariffMap);
   assert.ok(prices);
   assert.equal(prices.length, 1);
   assert.equal(prices[0].price, 0.35);
+  assert.equal(prices[0].evseId, 'evse-1');
+  assert.equal(prices[0].connectorId, 'conn-1');
 });
 
 test('mergePrices returns undefined when no tariffs', () => {
-  const prices = mergePrices([], [], {});
+  const prices = mergePrices([], {});
   assert.equal(prices, undefined);
+});
+
+test('mergePrices does not dedup identical tariffs across different connectors, so each price stays traceable to its own connector', () => {
+  const reveConnectors = [
+    { connectorId: 'conn-1', evseId: 'evse-1', standard: 'IEC_62196_T2' },
+    { connectorId: 'conn-2', evseId: 'evse-2', standard: 'IEC_62196_T2' },
+  ];
+  const tariffMap = {
+    'conn-1': [{ type: 'ENERGY', price: 0.35, currency: 'EUR', stepSize: 1 }],
+    'conn-2': [{ type: 'ENERGY', price: 0.35, currency: 'EUR', stepSize: 1 }],
+  };
+
+  const prices = mergePrices(reveConnectors, tariffMap);
+  assert.equal(prices.length, 2);
+  assert.deepEqual(
+    prices.map((p) => p.connectorId).sort(),
+    ['conn-1', 'conn-2'],
+  );
 });
 
 test('mergeAvailability returns most severe status', () => {
@@ -225,15 +244,15 @@ test('mergeAvailability returns undefined for empty evses', () => {
   assert.equal(mergeAvailability(undefined, {}), undefined);
 });
 
-test('mergeAvailability includes a per-EVSE breakdown with connector power/type', () => {
+test('mergeAvailability includes a per-EVSE breakdown with connector power/type/id', () => {
   const evses = [
     {
       id: 'evse-slow',
-      connectors: [{ standard: 'IEC_62196_T2', power_type: 'AC_3_PHASE', max_electric_power: 22000 }],
+      connectors: [{ id: 'conn-slow', standard: 'IEC_62196_T2', power_type: 'AC_3_PHASE', max_electric_power: 22000 }],
     },
     {
       id: 'evse-fast',
-      connectors: [{ standard: 'IEC_62196_T2_COMBO', power_type: 'DC', max_electric_power: 150000 }],
+      connectors: [{ id: 'conn-fast', standard: 'IEC_62196_T2_COMBO', power_type: 'DC', max_electric_power: 150000 }],
     },
   ];
   const statusMap = {
@@ -247,10 +266,14 @@ test('mergeAvailability includes a per-EVSE breakdown with connector power/type'
   const slow = result.evses.find((e) => e.evseId === 'evse-slow');
   assert.equal(slow.status, 'AVAILABLE');
   assert.equal(slow.connectors[0].maxPowerW, 22000);
+  // Same connectorId a price entry for this connector would carry (mergePrices) — this is
+  // the join key that relates availability and prices back to one physical connector.
+  assert.equal(slow.connectors[0].connectorId, 'conn-slow');
 
   const fast = result.evses.find((e) => e.evseId === 'evse-fast');
   assert.equal(fast.status, 'OUTOFORDER');
   assert.equal(fast.connectors[0].maxPowerW, 150000);
+  assert.equal(fast.connectors[0].connectorId, 'conn-fast');
 });
 
 test('enrichStations returns original when no API key', async () => {
