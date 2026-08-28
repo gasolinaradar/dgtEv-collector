@@ -241,6 +241,93 @@ function mergePrices(reveConnectors, tariffMap) {
   return prices.length > 0 ? prices : undefined;
 }
 
+// La DGT describe cada conector con su propio vocabulario (p. ej. `iec62196T2`,
+// `iec62196T2COMBO`, `chademo`), en camelCase, sin relación textual directa con el estándar
+// OCPI que usa Reve (`IEC_62196_T2`, `IEC_62196_T2_COMBO`, `CHADEMO`). Esta tabla solo cubre
+// los tipos de los que hay evidencia directa en datos reales o que son transcripciones
+// inequívocas del mismo estándar EAFO/DATEX II; un tipo de la DGT que no esté aquí
+// simplemente no se casa con nada y su conector se deja tal cual (sin `status`), en vez de
+// arriesgarse a adivinar mal.
+const DGT_TO_OCPI_CONNECTOR_TYPE = {
+  chademo: 'CHADEMO',
+  iec62196T1: 'IEC_62196_T1',
+  iec62196T1COMBO: 'IEC_62196_T1_COMBO',
+  iec62196T2: 'IEC_62196_T2',
+  iec62196T2COMBO: 'IEC_62196_T2_COMBO',
+  iec62196T3A: 'IEC_62196_T3A',
+  iec62196T3C: 'IEC_62196_T3C',
+  domesticA: 'DOMESTIC_A',
+  domesticB: 'DOMESTIC_B',
+  domesticC: 'DOMESTIC_C',
+  domesticD: 'DOMESTIC_D',
+  domesticE: 'DOMESTIC_E',
+  domesticF: 'DOMESTIC_F',
+  domesticG: 'DOMESTIC_G',
+  domesticH: 'DOMESTIC_H',
+  domesticI: 'DOMESTIC_I',
+  domesticJ: 'DOMESTIC_J',
+  domesticK: 'DOMESTIC_K',
+  domesticL: 'DOMESTIC_L',
+  domesticM: 'DOMESTIC_M',
+  domesticN: 'DOMESTIC_N',
+  domesticO: 'DOMESTIC_O',
+  gbtAc: 'GBT_AC',
+  gbtDc: 'GBT_DC',
+  pantographBottomUp: 'PANTOGRAPH_BOTTOM_UP',
+  pantographTopDown: 'PANTOGRAPH_TOP_DOWN',
+  tesla: 'TESLA_S',
+  teslaS: 'TESLA_S',
+  teslaR: 'TESLA_R',
+};
+
+// La potencia de la DGT viene en kW con un redondeo propio (43.7) y la de Reve en W tal cual
+// la reporta el EVSE (43470) — no siempre coinciden al convertir. Se admite un margen del 5%
+// (o 500W, lo que sea mayor) para no perder matches válidos por el redondeo, sin ser tan laxo
+// como para confundir potencias claramente distintas (22kW vs 50kW, por ejemplo).
+function powersMatch(maxPowerKw, maxPowerW) {
+  if (maxPowerKw === undefined || maxPowerW === undefined || maxPowerW === null) return false;
+  const expectedW = maxPowerKw * 1000;
+  const tolerance = Math.max(500, expectedW * 0.05);
+  return Math.abs(expectedW - maxPowerW) <= tolerance;
+}
+
+// Añade `status` (y `evseId` cuando no sea ambiguo) a cada conector de `connectors[]`
+// (inventario estático de la DGT) cruzándolo con `availability.evses[]` (estado en vivo de
+// Reve, por EVSE). El match es por tipo (vía DGT_TO_OCPI_CONNECTOR_TYPE) + potencia
+// (powersMatch): si un conector de la DGT casa con varios conectores de Reve que no están de
+// acuerdo en el estado, se deja sin tocar — mejor no anotar estado que anotar uno que podría
+// ser el de otro conector físico distinto.
+function mergeConnectorStatus(dgtConnectors, evseDetails) {
+  if (!Array.isArray(dgtConnectors) || dgtConnectors.length === 0) return dgtConnectors;
+  if (!Array.isArray(evseDetails) || evseDetails.length === 0) return dgtConnectors;
+
+  const reveConnectors = [];
+  for (const evse of evseDetails) {
+    for (const conn of Array.isArray(evse.connectors) ? evse.connectors : []) {
+      reveConnectors.push({ evseId: evse.evseId, status: evse.status, standard: conn.standard, maxPowerW: conn.maxPowerW });
+    }
+  }
+  if (reveConnectors.length === 0) return dgtConnectors;
+
+  return dgtConnectors.map((conn) => {
+    const ocpiType = DGT_TO_OCPI_CONNECTOR_TYPE[conn.type];
+    if (!ocpiType) return conn;
+
+    const matches = reveConnectors.filter(
+      (rc) => rc.standard === ocpiType && powersMatch(conn.maxPowerKw, rc.maxPowerW),
+    );
+    if (matches.length === 0) return conn;
+
+    const statuses = new Set(matches.map((m) => m.status));
+    if (statuses.size > 1) return conn;
+
+    const merged = { ...conn, status: matches[0].status };
+    const evseIds = new Set(matches.map((m) => m.evseId));
+    if (evseIds.size === 1) merged.evseId = matches[0].evseId;
+    return merged;
+  });
+}
+
 function summarizeConnectors(connectors) {
   return (Array.isArray(connectors) ? connectors : []).map((conn) => ({
     connectorId: conn.id,
@@ -495,14 +582,15 @@ async function enrichStations(stations, options = {}) {
     const reve = hit.item;
 
     const prices = mergePrices(reve.allConnectors, tariffMap);
-    const availability = mergeAvailability(reve.evses, statusMap);
+    const availability = mergeAvailability(reve.evses, statusMap) || station.availability;
 
     enriched.push({
       ...station,
       reveLocationId: reve.reveLocationId,
       operator: reve.operator || station.operator,
       prices: prices || station.prices,
-      availability: availability || station.availability,
+      availability,
+      connectors: availability?.evses ? mergeConnectorStatus(station.connectors, availability.evses) : station.connectors,
     });
   }
 
@@ -526,6 +614,7 @@ module.exports = {
   buildStatusMap,
   mergePrices,
   mergeAvailability,
+  mergeConnectorStatus,
   summarizeConnectors,
   DEFAULT_THRESHOLD_METERS,
   STATUS_PRIORITY,

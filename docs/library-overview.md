@@ -106,7 +106,10 @@ hasta que se enriquece.
   schedule: '24 horas',
   services: ['ev_charging', 'CAFE'],
   connectors: [
-    { type: 'IEC_62196_T2', format: 'SOCKET', mode: 'MODE_3', maxPowerKw: 22, voltageV: 230, maxCurrentA: 32 },
+    // status/evseId se añaden aquí (best-effort) cuando hay match tras enrichStations() —
+    // ver explicación después del bloque de ejemplo
+    { type: 'IEC_62196_T2', format: 'SOCKET', mode: 'MODE_3', maxPowerKw: 22, voltageV: 230, maxCurrentA: 32,
+      status: 'AVAILABLE', evseId: 'ES*ACM*E000001*1' },
   ],
   typeOfSite: 'onstreet',            // si el XML de la DGT lo trae
   authenticationMethods: ['rfid'],   // idem
@@ -147,10 +150,18 @@ un conector físico concreto de la ubicación Reve. El deduplicado ahora es solo
 tarifas de un mismo conector (un mismo elemento tarifario puede repetirse por franjas horarias),
 ya no colapsa entre conectores distintos como en versiones anteriores a `1.5.0-experimental.13`.
 
-Lo que sigue sin tener ID propio es el `connectors` de arriba, el de nivel superior parseado
-directo del XML de la DGT: ese array no trae ningún identificador de conector en el XML fuente,
-así que no se puede cruzar 1:1 con `prices`/`availability.evses` — como mucho, un matching por
-atributos (`type`/potencia), ambiguo cuando hay conectores duplicados del mismo tipo.
+El `connectors` de arriba, el de nivel superior parseado directo del XML de la DGT, sigue sin
+tener ID propio en el XML fuente — pero desde `1.5.0-experimental.14`, `enrichStations()`
+(ambas fuentes) le añade `status` (y `evseId`, cuando no es ambiguo) cruzándolo con
+`availability.evses[]`: `mergeConnectorStatus()` en `src/enrich.js` mapea el vocabulario propio
+de la DGT (`iec62196T2`, `chademo`, `iec62196T2COMBO`, ...) al estándar OCPI que usa Reve
+(`IEC_62196_T2`, `CHADEMO`, `IEC_62196_T2_COMBO`, ...) vía `DGT_TO_OCPI_CONNECTOR_TYPE`, y casa
+por tipo + potencia (con margen del 5%/500W para el redondeo kW↔W). Un conector se deja **sin**
+`status`/`evseId` cuando: su tipo DGT no está en la tabla de equivalencias, o casa con varios
+conectores Reve que no están de acuerdo en el estado (p. ej. el XML de la DGT trae el mismo
+conector duplicado y cada duplicado casa con un EVSE distinto) — en ambos casos, la ausencia de
+`status` en un conector **no** significa que esté averiado, hay que mirar `availability.evses[]`
+para el estado real.
 
 `availability.status` es un resumen: el estado de mayor prioridad entre todos los EVSEs de
 la ubicación (significado de cada valor, estándar OCPI):

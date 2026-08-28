@@ -221,6 +221,40 @@ test('enrichStationsPublic matches DGT stations to Reve public locations by prox
   assert.deepEqual(result[0].reveData, samplePublicLocation());
 });
 
+test('enrichStationsPublic annotates connectors[] with the matched EVSE status end-to-end', async () => {
+  const stations = [
+    {
+      sourceStationId: 'dgt-1',
+      name: 'Test Station',
+      location: { type: 'Point', coordinates: [-3.7038, 40.4168] },
+      connectors: [{ type: 'iec62196T2COMBO', maxPowerKw: 65 }],
+      prices: undefined,
+      availability: undefined,
+    },
+  ];
+
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      const page = config.params.page;
+      const pageData = page === 1 ? [samplePublicLocation()] : [];
+      return {
+        status: 200,
+        data: { data: pageData, pagination: { page, per_page: 50, total_pages: 1, total_count: 1 } },
+      };
+    },
+  };
+
+  const result = await enrichStationsPublic(stations, {
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    thresholdMeters: 100,
+  });
+
+  assert.equal(result[0].connectors[0].status, 'AVAILABLE');
+  assert.equal(result[0].connectors[0].evseId, 'ES*ACM*E000001*1');
+});
+
 test('enrichStationsPublic leaves stations untouched when nothing matches nearby', async () => {
   const stations = [
     {

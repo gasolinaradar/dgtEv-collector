@@ -222,6 +222,10 @@ When enriched with Reve data (`enrich.reveApiKey`), the fields are populated:
   typeOfSite: 'onstreet',
   operator: { name: 'Wenea', website: 'www.wenea.es' },
   reveLocationId: 'reve-abc-123',
+  connectors: [             // same array as before, now annotated with live status when matched
+    { type: 'IEC_62196_T2', format: 'SOCKET', mode: 'MODE_3', maxPowerKw: 22, voltageV: 230, maxCurrentA: 32,
+      status: 'AVAILABLE', evseId: 'ES*ACM*E1*1' },
+  ],
   prices: [                // each entry tagged with the connector/EVSE it came from
     { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
     { type: 'TIME', price: 0.02, currency: 'EUR', stepSize: 60, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
@@ -246,10 +250,16 @@ Notes / Notas:
 - `typeOfSite`, `authenticationMethods`, and `operator` are extracted from DGT XML when present.
 - Every `prices[]` entry and every `availability.evses[].connectors[]` entry carries the same
   `connectorId` (and `evseId`) when the underlying connector matches — that's the only reliable
-  way to relate a price to a specific physical connector/EVSE. The top-level `connectors` array
-  (parsed straight from DGT XML) has **no id of its own**, so it cannot be joined back to
-  `prices`/`availability` beyond a best-effort match on `type`/power — DGT's site XML doesn't
-  expose a stable per-connector identifier.
+  way to relate a price to a specific physical connector/EVSE.
+- The top-level `connectors` array (parsed straight from DGT XML) has **no id of its own**, so
+  when enrichment is enabled each entry gets a best-effort `status` (and `evseId`, when
+  unambiguous) merged in from `availability.evses[]` — matched by connector type (DGT's own
+  vocabulary, e.g. `iec62196T2`, mapped to the OCPI equivalent Reve uses, e.g. `IEC_62196_T2`)
+  plus power, allowing for kW↔W rounding. A connector is left **without** `status`/`evseId`
+  when: its DGT type has no known OCPI mapping, or it matches several Reve connectors that
+  disagree on status (ambiguous — DGT's connector list has no id to disambiguate with, e.g. a
+  station whose XML lists the same connector twice). Absence of `status` on a connector does
+  **not** mean it's down; check `availability.evses[]` for the authoritative per-EVSE state.
 
 ---
 

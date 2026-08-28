@@ -1,5 +1,12 @@
 const { createRevePublicClient, DEFAULT_MAX_PAGES } = require('./reve-public');
-const { SpatialIndex, STATUS_PRIORITY, DEFAULT_THRESHOLD_METERS, haversineMeters, summarizeConnectors } = require('./enrich');
+const {
+  SpatialIndex,
+  STATUS_PRIORITY,
+  DEFAULT_THRESHOLD_METERS,
+  haversineMeters,
+  summarizeConnectors,
+  mergeConnectorStatus,
+} = require('./enrich');
 
 function normalizeStationName(name) {
   if (typeof name !== 'string') return null;
@@ -204,12 +211,14 @@ async function enrichStationsPublic(stations, options = {}) {
     else matchedByProximity += 1;
 
     const reve = best.reve;
+    const availability = mergePublicAvailability(reve) || station.availability;
     enriched.push({
       ...station,
       reveLocationId: reve.reveLocationId,
       operator: reve.operator || station.operator,
       prices: mergePublicPrices(reve) || station.prices,
-      availability: mergePublicAvailability(reve) || station.availability,
+      availability,
+      connectors: availability?.evses ? mergeConnectorStatus(station.connectors, availability.evses) : station.connectors,
       reveData: reve.raw,
     });
   });

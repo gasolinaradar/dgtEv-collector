@@ -11,6 +11,7 @@ const {
   buildStatusMap,
   mergePrices,
   mergeAvailability,
+  mergeConnectorStatus,
   enrichStations,
 } = require('../src/enrich');
 const { createReveCache } = require('../src/cache');
@@ -276,6 +277,58 @@ test('mergeAvailability includes a per-EVSE breakdown with connector power/type/
   assert.equal(fast.connectors[0].connectorId, 'conn-fast');
 });
 
+test('mergeConnectorStatus matches DGT connectors to their Reve EVSE status by type + power, duplicates included', () => {
+  // Reproduces a real station: 3 connector types duplicated x2 in `connectors[]` (DGT), but a
+  // single EVSE in Reve reporting only one of each — every duplicate should still resolve to
+  // that EVSE's status, and the kW-vs-W rounding (43.7kW vs 43470W) should not block the match.
+  const dgtConnectors = [
+    { type: 'iec62196T2', maxPowerKw: 43.7 },
+    { type: 'iec62196T2COMBO', maxPowerKw: 50 },
+    { type: 'chademo', maxPowerKw: 50 },
+    { type: 'iec62196T2', maxPowerKw: 43.7 },
+    { type: 'iec62196T2COMBO', maxPowerKw: 50 },
+    { type: 'chademo', maxPowerKw: 50 },
+  ];
+  const evseDetails = [
+    {
+      evseId: 'ES*REP*E10477*1',
+      status: 'OUTOFORDER',
+      connectors: [
+        { standard: 'CHADEMO', maxPowerW: 50000 },
+        { standard: 'IEC_62196_T2', maxPowerW: 43470 },
+        { standard: 'IEC_62196_T2_COMBO', maxPowerW: 50000 },
+      ],
+    },
+  ];
+
+  const result = mergeConnectorStatus(dgtConnectors, evseDetails);
+  assert.equal(result.length, 6);
+  for (const conn of result) {
+    assert.equal(conn.status, 'OUTOFORDER');
+    assert.equal(conn.evseId, 'ES*REP*E10477*1');
+  }
+});
+
+test('mergeConnectorStatus leaves a connector untouched when it matches EVSEs that disagree on status', () => {
+  const dgtConnectors = [{ type: 'iec62196T2', maxPowerKw: 22 }];
+  const evseDetails = [
+    { evseId: 'evse-a', status: 'AVAILABLE', connectors: [{ standard: 'IEC_62196_T2', maxPowerW: 22000 }] },
+    { evseId: 'evse-b', status: 'OUTOFORDER', connectors: [{ standard: 'IEC_62196_T2', maxPowerW: 22000 }] },
+  ];
+
+  const result = mergeConnectorStatus(dgtConnectors, evseDetails);
+  assert.equal(result[0].status, undefined);
+  assert.equal(result[0].evseId, undefined);
+});
+
+test('mergeConnectorStatus leaves a connector untouched when its DGT type has no known OCPI equivalent', () => {
+  const dgtConnectors = [{ type: 'someUnmappedType', maxPowerKw: 22 }];
+  const evseDetails = [{ evseId: 'evse-a', status: 'AVAILABLE', connectors: [{ standard: 'IEC_62196_T2', maxPowerW: 22000 }] }];
+
+  const result = mergeConnectorStatus(dgtConnectors, evseDetails);
+  assert.deepEqual(result[0], { type: 'someUnmappedType', maxPowerKw: 22 });
+});
+
 test('enrichStations returns original when no API key', async () => {
   const stations = [
     {
@@ -393,6 +446,59 @@ test('enrichStations matches DGT stations to Reve by proximity', async () => {
   assert.ok(result[0].availability);
   assert.equal(result[0].availability.status, 'AVAILABLE');
   assert.equal(result[0].operator.name, 'Wenea');
+});
+
+test('enrichStations annotates connectors[] with the matched EVSE status end-to-end', async () => {
+  const stations = [
+    {
+      sourceStationId: 'dgt-1',
+      name: 'Test Station',
+      location: { type: 'Point', coordinates: [-3.7038, 40.4168] },
+      connectors: [{ type: 'iec62196T2', maxPowerKw: 22 }],
+      prices: undefined,
+      availability: undefined,
+    },
+  ];
+
+  const fakeHttpClient = {
+    get: async (url) => {
+      if (url.includes('/evses/operational_status')) {
+        return { status: 200, data: [{ evse_id: 'evse-1', status: 'CHARGING' }], headers: { 'total-count': '1', 'total-pages': '1' } };
+      }
+      if (url.includes('/connectors/tariffs')) {
+        return { status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } };
+      }
+      if (url.includes('/locations')) {
+        return {
+          status: 200,
+          data: [
+            {
+              id: 'reve-1',
+              coordinates: { latitude: '40.4168', longitude: '-3.7038' },
+              evses: [
+                {
+                  id: 'evse-1',
+                  connectors: [{ id: 'conn-1', standard: 'IEC_62196_T2', max_electric_power: 22000 }],
+                },
+              ],
+            },
+          ],
+          headers: { 'total-count': '1', 'total-pages': '1' },
+        };
+      }
+      return { status: 200, data: [], headers: { 'total-count': '0', 'total-pages': '1' } };
+    },
+  };
+
+  const result = await enrichStations(stations, {
+    reveApiKey: 'test-key',
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    thresholdMeters: 100,
+  });
+
+  assert.equal(result[0].connectors[0].status, 'CHARGING');
+  assert.equal(result[0].connectors[0].evseId, 'evse-1');
 });
 
 test('enrichStations fetches locations before status/tariffs (locations get priority for the shared rate limit)', async () => {
