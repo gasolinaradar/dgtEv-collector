@@ -60,6 +60,10 @@ function mergePublicPrices(reveLoc) {
               currency,
               vat: comp.vat !== undefined && comp.vat !== null ? parseFloat(comp.vat) : undefined,
               stepSize: comp.step_size,
+              restrictions:
+                element.restrictions && typeof element.restrictions === 'object' && Object.keys(element.restrictions).length > 0
+                  ? element.restrictions
+                  : undefined,
               evseId: evse.evse_id,
               connectorId: conn.id,
             });

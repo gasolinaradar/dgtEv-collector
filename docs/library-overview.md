@@ -121,6 +121,10 @@ hasta que se enriquece.
   reveLocationId: 'uuid-de-la-ubicacion-reve',
   prices: [               // cada entrada lleva el evseId/connectorId del conector Reve del que sale
     { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1, evseId: 'ES*ACM*E000001*1', connectorId: 'conn-1' },
+    // dos entradas PARKING_TIME del mismo conector con precio distinto NO son un duplicado:
+    // cada una aplica bajo su propio `restrictions` (aquí, gratis la primera hora, después 3€/min)
+    { type: 'PARKING_TIME', price: 0, currency: 'EUR', stepSize: 60, restrictions: { max_duration: 3600 }, evseId: 'ES*ACM*E000001*1', connectorId: 'conn-1' },
+    { type: 'PARKING_TIME', price: 3, currency: 'EUR', stepSize: 60, evseId: 'ES*ACM*E000001*1', connectorId: 'conn-1' },
   ],
   availability: {
     status: 'AVAILABLE', // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | PLANNED | REMOVED | UNKNOWN
@@ -149,6 +153,15 @@ Cada entrada de `prices` lleva `evseId`/`connectorId` — el mismo identificador
 un conector físico concreto de la ubicación Reve. El deduplicado ahora es solo dentro de las
 tarifas de un mismo conector (un mismo elemento tarifario puede repetirse por franjas horarias),
 ya no colapsa entre conectores distintos como en versiones anteriores a `1.5.0-experimental.13`.
+
+Desde `1.5.0-experimental.14`, cada entrada también lleva `restrictions` cuando el elemento de
+tarifa OCPI del que sale declara alguna (`max_duration`, `start_time`/`end_time`, etc., tal cual
+las reporta Reve, sin transformar). Antes este campo se descartaba al aplanar `tariff.elements[]`
+a `prices[]` — por eso un mismo `connectorId` podía mostrar, p. ej., dos entradas `PARKING_TIME`
+con precios distintos (0€ y 3€) sin ninguna pista de por qué: eran dos tramos de la misma
+tarifa (gratis la primera hora, de pago después), no un duplicado ni un dato contradictorio.
+Sin `restrictions` no hay forma de saber cuál aplica cuándo — ahora sí la hay. Ausencia de
+`restrictions` en una entrada significa que aplica sin condición.
 
 El `connectors` de arriba, el de nivel superior parseado directo del XML de la DGT, sigue sin
 tener ID propio en el XML fuente — pero desde `1.5.0-experimental.14`, `enrichStations()`

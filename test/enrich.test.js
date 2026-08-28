@@ -164,6 +164,29 @@ test('buildTariffMap creates connector-to-tariffs mapping', () => {
   assert.equal(map['conn-1'][1].price, 0.05);
 });
 
+test('buildTariffMap carries restrictions through, so two components of the same type with different prices are distinguishable as separate bands, not duplicates', () => {
+  const data = [
+    {
+      connector_id: 'conn-1',
+      tariffs: [
+        {
+          id: 't1',
+          currency: 'EUR',
+          elements: [
+            { price_components: [{ type: 'PARKING_TIME', price: '0', step_size: 60 }], restrictions: { max_duration: 3600 } },
+            { price_components: [{ type: 'PARKING_TIME', price: '3', step_size: 60 }] },
+          ],
+        },
+      ],
+    },
+  ];
+
+  const map = buildTariffMap(data);
+  assert.equal(map['conn-1'].length, 2);
+  assert.deepEqual(map['conn-1'][0].restrictions, { max_duration: 3600 });
+  assert.equal(map['conn-1'][1].restrictions, undefined);
+});
+
 test('buildStatusMap creates evse-to-status mapping from boolean format', () => {
   const data = [
     { evse_id: 'evse-1', operational_status: true, last_operational_status_updated: '2026-01-01T00:00:00Z' },
@@ -202,6 +225,21 @@ test('mergePrices returns tariffs from Reve connectors, tagged with evseId/conne
   assert.equal(prices[0].price, 0.35);
   assert.equal(prices[0].evseId, 'evse-1');
   assert.equal(prices[0].connectorId, 'conn-1');
+});
+
+test('mergePrices carries restrictions through to the final price entries', () => {
+  const reveConnectors = [{ connectorId: 'conn-1', evseId: 'evse-1', standard: 'IEC_62196_T2' }];
+  const tariffMap = {
+    'conn-1': [
+      { type: 'PARKING_TIME', price: 0, currency: 'EUR', restrictions: { max_duration: 3600 } },
+      { type: 'PARKING_TIME', price: 3, currency: 'EUR' },
+    ],
+  };
+
+  const prices = mergePrices(reveConnectors, tariffMap);
+  assert.equal(prices.length, 2);
+  assert.deepEqual(prices[0].restrictions, { max_duration: 3600 });
+  assert.equal(prices[1].restrictions, undefined);
 });
 
 test('mergePrices returns undefined when no tariffs', () => {

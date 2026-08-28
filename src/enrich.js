@@ -148,6 +148,15 @@ function normalizeReveLocation(loc) {
   };
 }
 
+// Un elemento de tarifa OCPI sin `restrictions` (u objeto vacío) se aplica siempre; con
+// `restrictions` (p. ej. `max_duration`, `start_time`/`end_time`) solo aplica bajo esas
+// condiciones — es lo que explica que un mismo connectorId tenga dos componentes del mismo
+// `type` con precios distintos (p. ej. PARKING_TIME a 0€ los primeros minutos y a 3€/min
+// después): no son un duplicado, son dos tramos.
+function hasRestrictions(restrictions) {
+  return !!restrictions && typeof restrictions === 'object' && Object.keys(restrictions).length > 0;
+}
+
 function buildTariffMap(tariffsData) {
   const map = {};
   for (const entry of tariffsData) {
@@ -166,6 +175,7 @@ function buildTariffMap(tariffsData) {
             currency: tariff.currency || 'EUR',
             vat: comp.vat ? parseFloat(comp.vat) : undefined,
             stepSize: comp.step_size,
+            restrictions: hasRestrictions(element.restrictions) ? element.restrictions : undefined,
           });
         }
       }
@@ -232,6 +242,7 @@ function mergePrices(reveConnectors, tariffMap) {
         currency: tariff.currency,
         vat: tariff.vat,
         stepSize: tariff.stepSize,
+        restrictions: tariff.restrictions,
         evseId: conn.evseId,
         connectorId: conn.connectorId,
       });
@@ -499,7 +510,7 @@ async function enrichStations(stations, options = {}) {
         tariffs: tariffs.map((t) => ({
           id: `${connectorId}:${t.type}`,
           currency: t.currency,
-          elements: [{ price_components: [{ type: t.type, price: String(t.price), step_size: t.stepSize }] }],
+          elements: [{ price_components: [{ type: t.type, price: String(t.price), step_size: t.stepSize }], restrictions: t.restrictions }],
         })),
       }));
     }
@@ -520,30 +531,10 @@ async function enrichStations(stations, options = {}) {
     }
     cache.bulkUpdateStatus(statusEntries);
 
-    const tariffEntries = {};
-    for (const entry of tariffsData) {
-      if (entry.connector_id) {
-        const tariffs = Array.isArray(entry.tariffs) ? entry.tariffs : [];
-        const simplified = [];
-        for (const tariff of tariffs) {
-          const elements = Array.isArray(tariff.elements) ? tariff.elements : [];
-          for (const element of elements) {
-            const components = Array.isArray(element.price_components) ? element.price_components : [];
-            for (const comp of components) {
-              simplified.push({
-                type: comp.type,
-                price: parseFloat(comp.price) || 0,
-                currency: tariff.currency || 'EUR',
-                vat: comp.vat ? parseFloat(comp.vat) : undefined,
-                stepSize: comp.step_size,
-              });
-            }
-          }
-        }
-        tariffEntries[entry.connector_id] = simplified;
-      }
-    }
-    cache.bulkUpdateTariffs(tariffEntries);
+    // Misma lógica que buildTariffMap — reutilizarla en vez de duplicarla evita que las dos
+    // copias diverjan (como ya pasó: esta acumuló su propio bug de vat/restrictions perdidos
+    // que buildTariffMap no tenía).
+    cache.bulkUpdateTariffs(buildTariffMap(tariffsData));
   }
 
   // Igual que las ubicaciones: si hay cache, el matching usa el histórico completo acumulado

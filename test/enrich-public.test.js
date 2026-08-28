@@ -123,6 +123,43 @@ test('mergePublicPrices does not dedup identical tariffs across different connec
   );
 });
 
+test('mergePublicPrices carries restrictions through, so a PARKING_TIME split into a free band and a paid band is distinguishable, not a duplicate', () => {
+  const reveLoc = normalizeRevePublicLocation(
+    samplePublicLocation({
+      evses: [
+        {
+          evse_id: 'evse-1',
+          status: 'AVAILABLE',
+          connectors: [
+            {
+              id: 'conn-1',
+              standard: 'IEC_62196_T2',
+              tariffs: [
+                {
+                  tariff: {
+                    currency: 'EUR',
+                    elements: [
+                      { price_components: [{ type: 'PARKING_TIME', price: 0, step_size: 60 }], restrictions: { max_duration: 3600 } },
+                      { price_components: [{ type: 'PARKING_TIME', price: 3, step_size: 60 }] },
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+
+  const prices = mergePublicPrices(reveLoc);
+  assert.equal(prices.length, 2);
+  const free = prices.find((p) => p.price === 0);
+  const paid = prices.find((p) => p.price === 3);
+  assert.deepEqual(free.restrictions, { max_duration: 3600 });
+  assert.equal(paid.restrictions, undefined);
+});
+
 test('mergePublicAvailability picks the highest-priority status', () => {
   const reveLoc = normalizeRevePublicLocation(samplePublicLocation());
   const availability = mergePublicAvailability(reveLoc);

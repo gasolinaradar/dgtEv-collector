@@ -228,7 +228,10 @@ When enriched with Reve data (`enrich.reveApiKey`), the fields are populated:
   ],
   prices: [                // each entry tagged with the connector/EVSE it came from
     { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
-    { type: 'TIME', price: 0.02, currency: 'EUR', stepSize: 60, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
+    // two PARKING_TIME entries, same connector, different price — NOT a duplicate: each
+    // applies under a different `restrictions` band (free for the first hour, then paid)
+    { type: 'PARKING_TIME', price: 0, currency: 'EUR', stepSize: 60, restrictions: { max_duration: 3600 }, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
+    { type: 'PARKING_TIME', price: 3, currency: 'EUR', stepSize: 60, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
   ],
   availability: {
     status: 'AVAILABLE',   // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | PLANNED | REMOVED | UNKNOWN
@@ -251,6 +254,12 @@ Notes / Notas:
 - Every `prices[]` entry and every `availability.evses[].connectors[]` entry carries the same
   `connectorId` (and `evseId`) when the underlying connector matches — that's the only reliable
   way to relate a price to a specific physical connector/EVSE.
+- A `prices[]` entry only carries `restrictions` (raw OCPI tariff-element restrictions, e.g.
+  `max_duration`, `start_time`/`end_time`) when the underlying tariff element declares one — its
+  absence means that entry applies unconditionally. **Two entries with the same `type` and
+  `connectorId` but different `price` are not duplicates**: they're separate time/duration bands
+  from the same OCPI tariff (e.g. free parking for the first hour, then billed per minute) — read
+  `restrictions` to tell them apart instead of assuming the larger/smaller one is "the" price.
 - The top-level `connectors` array (parsed straight from DGT XML) has **no id of its own**, so
   when enrichment is enabled each entry gets a best-effort `status` (and `evseId`, when
   unambiguous) merged in from `availability.evses[]` — matched by connector type (DGT's own
