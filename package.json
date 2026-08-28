@@ -1,6 +1,6 @@
 {
   "name": "@gasolinaradar/dgt-ev-collector",
-  "version": "1.5.0-experimental.15",
+  "version": "1.5.0",
   "description": "Collector for the official DGT EV charging station dataset (Spain) returning normalized EV charging stations",
   "main": "src/index.js",
   "exports": {
@@ -43,8 +43,7 @@
   ],
   "license": "MIT",
   "publishConfig": {
-    "access": "public",
-    "tag": "experimental"
+    "access": "public"
   },
   "dependencies": {
     "axios": "^1.13.2",

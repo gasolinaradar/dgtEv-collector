@@ -5,10 +5,11 @@ lo que hace, todos los datos que produce, y cómo se comporta en cada caso. Todo
 aquí está verificado contra el código real de la versión indicada abajo — nada es
 aspiracional.
 
-**Versión actual**: `1.5.0-experimental.8`, publicada bajo el dist-tag npm `experimental`
-(`npm install @gasolinaradar/dgt-ev-collector@experimental`) — **no** es todavía la versión
-`latest`. El código ya está limpio/unificado (esto es justo lo que documenta este archivo),
-pero se sigue publicando como prerelease para poder probarlo en PRE antes de promoverlo.
+**Versión actual**: `1.5.0`, versión definitiva — ya es la `latest` en npm, promovida tras
+validar en PRE toda la serie `1.5.0-experimental.0` a `.15` (fetch/enrich unificado,
+enriquecimiento `public` opt-in, fixes de memoria/paginación, desglose por EVSE, `connectors[]`
+reconciliado con el estado en vivo, `restrictions` en `prices[]`, progreso durante el
+enriquecimiento).
 
 ---
 
@@ -31,7 +32,7 @@ El enriquecimiento es completamente opcional: sin configurarlo, la librería sol
 ## 2. Instalación y exports
 
 ```bash
-npm install @gasolinaradar/dgt-ev-collector@experimental
+npm install @gasolinaradar/dgt-ev-collector
 ```
 
 ```js
@@ -370,9 +371,9 @@ ejemplos reales de request/response): `docs/reve-public-pricing-flow.md`.
 
 ## 9. Estado de publicación
 
-- Versión publicada bajo el dist-tag `experimental` (`npm install ...@experimental`) — no es
-  `latest`. Pensado para probar en PRE antes de decidir promoverlo.
-- El código en sí (esto que documenta este archivo) ya está en su forma "limpia" — no hay
-  namespace `experimental` en la API pública ni nada marcado como tal en el código; lo único
-  que sigue siendo "experimental" es la etiqueta de publicación en npm, a la espera de
-  validación en PRE.
+- `1.5.0` es la versión definitiva, publicada como `latest` en npm (`npm install
+  @gasolinaradar/dgt-ev-collector`) — ya no hay dist-tag `experimental` que pedir aparte. Se
+  promovió tras validar en PRE, estación a estación, cada cambio de la serie
+  `1.5.0-experimental.0`–`.15`.
+- El código en sí (esto que documenta este archivo) está en su forma "limpia" — no hay
+  namespace `experimental` en la API pública ni nada marcado como tal en el código.
