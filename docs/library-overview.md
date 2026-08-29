@@ -140,12 +140,11 @@ hasta que se enriquece.
   },
 
   // --- Solo si el match vino de la fuente PUBLIC ---
-  reveData: { /* objeto crudo devuelto por POST /api/public/v1/locations, sin procesar:
-                 id, name, address, postal_code, country, owner{name,website,logo,phone},
-                 coordinates{latitude,longitude}, facilities[], opening_times{...},
-                 evses[{evse_id, status, status_updated_at, connectors[{id, standard,
-                 format, max_electric_power, tariffs[{human, tariff:{currency, elements[
-                 {price_components[{type, price, vat, step_size}]}]}}]}], payment_methods}] */ },
+  reveData: { /* rebanada reducida de la ubicacion de POST /api/public/v1/locations, con
+                 solo los campos que consume el enriquecimiento (no el objeto crudo completo):
+                 evses[{evse_id, status, connectors[{id, standard, format, power_type,
+                 max_electric_power, tariffs[{tariff:{currency, elements[{restrictions,
+                 price_components[{type, price, vat, step_size}]}]}}]} ]}] */ },
 }
 ```
 
@@ -201,9 +200,11 @@ Para eso está `availability.evses`: un desglose por EVSE con su `status` indivi
 resumen de sus conectores (`connectorId`, `standard`, `powerType`, `maxPowerW`), para poder
 distinguir en la UI "3 de 4 libres, el averiado es el rápido" en vez de depender solo del
 resumen.
-`reveData` sigue disponible (solo fuente `public`) con el objeto crudo completo si hace
-falta bajar a un nivel de detalle que ni `evses` cubre (tarifas por conector, horarios,
-métodos de pago, etc.).
+`reveData` sigue disponible (solo fuente `public`) como rebanada reducida con los evses/
+conectores/tarifas que usa el enriquecimiento, por si hace falta bajar a un nivel de detalle
+que el resumen no cubre (tarifas por conector, etc.). No incluye los campos que esa
+enriquecimiento no consume (horarios, métodos de pago, owner completo), que se descartan al
+reducir para acotar la memoria.
 
 ---
 

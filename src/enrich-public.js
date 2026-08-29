@@ -14,6 +14,39 @@ function normalizeStationName(name) {
   return normalized || null;
 }
 
+// Keep only the nested evses/connectors/tariffs fields that mergePublicPrices,
+// mergePublicAvailability (via summarizeConnectors) and mergeConnectorStatus actually read.
+// The full raw /locations/{id} payload (opening_times, facilities, payment_methods, the
+// `human` tariff strings, etc.) is dropped here so a national sweep does not hold ~10.5k
+// full raw locations resident in the match index and again on every enriched station.
+function reduceReveLocationData(loc) {
+  const evses = Array.isArray(loc.evses) ? loc.evses : [];
+  return {
+    evses: evses.map((evse) => ({
+      evse_id: evse.evse_id,
+      status: evse.status,
+      connectors: (Array.isArray(evse.connectors) ? evse.connectors : []).map((conn) => ({
+        id: conn.id,
+        standard: conn.standard,
+        format: conn.format,
+        power_type: conn.power_type,
+        max_electric_power: conn.max_electric_power,
+        tariffs: (Array.isArray(conn.tariffs) ? conn.tariffs : []).map((t) => ({
+          tariff: t && t.tariff
+            ? {
+                currency: t.tariff.currency,
+                elements: (Array.isArray(t.tariff.elements) ? t.tariff.elements : []).map((element) => ({
+                  restrictions: element.restrictions,
+                  price_components: element.price_components,
+                })),
+              }
+            : undefined,
+        })),
+      })),
+    })),
+  };
+}
+
 function normalizeRevePublicLocation(loc) {
   const lat = parseFloat(loc.coordinates?.latitude);
   const lon = parseFloat(loc.coordinates?.longitude);
@@ -30,14 +63,14 @@ function normalizeRevePublicLocation(loc) {
     address: loc.address || null,
     city: loc.city || null,
     postalCode: loc.postal_code || null,
-    raw: loc,
+    reveData: reduceReveLocationData(loc),
   };
 }
 
 // Same evseId/connectorId tagging as mergePrices in enrich.js, and same reasoning: dedup stays
 // scoped to each connector's own tariff list, not across connectors, so the IDs stay meaningful.
 function mergePublicPrices(reveLoc) {
-  const evses = Array.isArray(reveLoc.raw?.evses) ? reveLoc.raw.evses : [];
+  const evses = Array.isArray(reveLoc.reveData?.evses) ? reveLoc.reveData.evses : [];
   const prices = [];
 
   for (const evse of evses) {
@@ -77,7 +110,7 @@ function mergePublicPrices(reveLoc) {
 }
 
 function mergePublicAvailability(reveLoc) {
-  const evses = Array.isArray(reveLoc.raw?.evses) ? reveLoc.raw.evses : [];
+  const evses = Array.isArray(reveLoc.reveData?.evses) ? reveLoc.reveData.evses : [];
   const withStatus = evses.filter((evse) => typeof evse.status === 'string');
   if (withStatus.length === 0) return undefined;
 
@@ -223,7 +256,7 @@ async function enrichStationsPublic(stations, options = {}) {
       prices: mergePublicPrices(reve) || station.prices,
       availability,
       connectors: availability?.evses ? mergeConnectorStatus(station.connectors, availability.evses) : station.connectors,
-      reveData: reve.raw,
+      reveData: reve.reveData,
     });
   });
 

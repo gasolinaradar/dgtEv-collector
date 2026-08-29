@@ -62,8 +62,22 @@ test('normalizeRevePublicLocation parses the real /locations/{id} shape', () => 
   assert.equal(result.lon, -3.7038);
   assert.equal(result.operator.name, 'ACME Recarga S.L.');
   assert.equal(result.operator.website, 'acme-recarga.example');
-  assert.ok(result.raw);
-  assert.equal(result.raw.id, 'reve-pub-1');
+  // Only the reduced evses/connectors/tariffs slice is retained, not the full raw payload.
+  assert.equal(result.raw, undefined);
+  assert.ok(result.reveData);
+  assert.equal(result.reveData.id, undefined);
+  assert.equal(result.reveData.evses.length, 1);
+  assert.equal(result.reveData.evses[0].evse_id, 'ES*ACM*E000001*1');
+  assert.equal(result.reveData.evses[0].status, 'AVAILABLE');
+  assert.equal(result.reveData.evses[0].connectors[0].id, 'conn-1');
+  assert.equal(result.reveData.evses[0].connectors[0].standard, 'IEC_62196_T2_COMBO');
+  assert.equal(result.reveData.evses[0].connectors[0].max_electric_power, 65000);
+  assert.equal(
+    result.reveData.evses[0].connectors[0].tariffs[0].tariff.elements[0].price_components[0].price,
+    0.48,
+  );
+  // Fields the mergers never read are dropped.
+  assert.equal(result.reveData.evses[0].connectors[0].tariffs[0].human, undefined);
 });
 
 test('normalizeRevePublicLocation returns null for invalid coordinates', () => {
@@ -252,10 +266,35 @@ test('enrichStationsPublic matches DGT stations to Reve public locations by prox
   assert.ok(result[0].availability);
   assert.equal(result[0].availability.status, 'AVAILABLE');
 
-  // The exact raw API object is kept too, not just the flattened fields above.
+  // A reduced evses/connectors/tariffs slice is kept (not the full raw payload), enough for
+  // downstream consumers to see which EVSE/connector each price and status came from.
   assert.ok(result[0].reveData);
-  assert.equal(result[0].reveData.id, 'reve-pub-1');
-  assert.deepEqual(result[0].reveData, samplePublicLocation());
+  assert.equal(result[0].reveData.id, undefined);
+  assert.deepEqual(result[0].reveData, {
+    evses: [
+      {
+        evse_id: 'ES*ACM*E000001*1',
+        status: 'AVAILABLE',
+        connectors: [
+          {
+            id: 'conn-1',
+            standard: 'IEC_62196_T2_COMBO',
+            format: 'CABLE',
+            power_type: undefined,
+            max_electric_power: 65000,
+            tariffs: [
+              {
+                tariff: {
+                  currency: 'EUR',
+                  elements: [{ restrictions: undefined, price_components: [{ type: 'ENERGY', price: 0.48, vat: 21.0, step_size: 1 }] }],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
 });
 
 test('enrichStationsPublic annotates connectors[] with the matched EVSE status end-to-end', async () => {

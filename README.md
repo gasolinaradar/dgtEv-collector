@@ -370,16 +370,20 @@ simplemente no hacía nada; fuerza `source: 'external'` explícitamente si quier
 no-op de antes sin clave.
 
 Both fields produce the same output shape (`reveLocationId`, `operator`, `prices`,
-`availability`) — `source: 'public'` additionally sets **`reveData`**, the exact raw location
-object matched from `POST /locations` (evses/connectors/tariffs/owner, unprocessed), so a
-consuming API can render or persist the full Reve object directly, or look it up again later
-via `GET /api/public/v1/locations/{reveLocationId}`.
+`availability`) — `source: 'public'` additionally sets **`reveData`**, a reduced slice of the
+location matched from `POST /locations` that keeps only the fields the enrichment reads
+(`evses[].evse_id`/`status` and `connectors` with `id`/`standard`/`format`/`power_type`/
+`max_electric_power`/`tariffs`), not the full raw object — so a consuming API can still inspect
+the source data without the memory cost of holding the whole Reve location. To re-fetch the full
+object later, use `GET /api/public/v1/locations/{reveLocationId}`.
 
 Ambas rutas producen la misma forma de salida (`reveLocationId`, `operator`, `prices`,
-`availability`) — `source: 'public'` añade además **`reveData`**, el objeto crudo de la
-ubicación tal cual lo devuelve `POST /locations` (evses/conectores/tarifas/owner, sin
-procesar), para que una API propia pueda pintarlo o guardarlo directamente, o volver a
-consultarlo luego vía `GET /api/public/v1/locations/{reveLocationId}`.
+`availability`) — `source: 'public'` añade además **`reveData`**, una rebanada reducida de la
+ubicación devuelta por `POST /locations` que conserva solo los campos que usa el enriquecimiento
+(`evses[].evse_id`/`status` y `connectors` con `id`/`standard`/`format`/`power_type`/
+`max_electric_power`/`tariffs`), no el objeto crudo completo — para que una API propia pueda
+inspeccionar los datos de origen sin el coste de memoria de retener toda la ubicación Reve. Para
+volver a obtener el objeto completo, usa `GET /api/public/v1/locations/{reveLocationId}`.
 
 ### `source: 'external'` — documented, stable, rate-limited
 
