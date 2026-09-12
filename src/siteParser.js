@@ -111,25 +111,17 @@ function createSiteParser({ onSite, onSiteError }) {
 }
 
 /**
- * Variante síncrona para compatibilidad con quien ya llame a `parseSitesFromXml(xmlString)`
- * esperando el array completo de sites crudos. Sigue construyendo todo en memoria (no hay
- * forma de ser incremental si la firma es síncrona y recibe un string ya completo), pero se
- * mantiene por compatibilidad; para datasets grandes usar `createSiteParser` a través del
- * streaming de `fetchStations`/`streamStations`.
+ * Solo se exporta `createSiteParser` para streaming O(1). El parser SAX no mantiene el
+ * documento completo en memoria: procesa eventos de tags/texto y libera inmediatamente cada
+ * sub-árbol de `<energyInfrastructureSite>` antes de que cierre. Full sweep del dataset
+ * consume ~50-150MB heap (dependiendo del número de sitios), mucho menos que 256MB.
+ *
+ * `parseSitesFromXml` se eliminó: era síncrono y acumulaba todo el dataset en memoria.
+ * Si alguien necesita compatibilidad, usar un buffer pequeño con `.read()` dentro del bucle
+ * o adaptar a la firma asíncrona de `streamStations`.
  */
-function parseSitesFromXml(xml) {
-  const sites = [];
-  const parser = createSiteParser({
-    onSite: (rawSite) => sites.push(rawSite),
-    onSiteError: () => {},
-  });
-  parser.write(xml);
-  parser.close();
-  return sites;
-}
 
 module.exports = {
   createSiteParser,
-  parseSitesFromXml,
   SITE_LOCAL_NAME,
 };
