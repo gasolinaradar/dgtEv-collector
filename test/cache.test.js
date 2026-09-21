@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { createReveCache } = require('../src/cache');
+const { createReveCache, createSweepCache } = require('../src/cache');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'reve-cache-test-'));
@@ -144,6 +144,50 @@ test('cache is atomic (uses tmp + rename)', () => {
 
   const files = fs.readdirSync(dir);
   assert.ok(!files.some((f) => f.endsWith('.tmp')));
+
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('createSweepCache persists pages and the nextPage cursor', () => {
+  const dir = tempDir();
+  const cache = createSweepCache(dir, { body: { latitude_ne: 44 }, perPage: 25 });
+
+  const pageResult = { data: [{ id: 'loc-1' }], page: 1, totalPages: 7 };
+  cache.setPage(1, pageResult);
+
+  assert.deepEqual(cache.getPage(1), pageResult);
+  assert.equal(cache.getPage(2), null);
+  assert.deepEqual(cache.loadMeta(), { nextPage: 2, totalPages: 7, updatedAt: cache.loadMeta().updatedAt });
+
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('createSweepCache page expires once cacheTtlMs has passed (re-fetchable)', () => {
+  const dir = tempDir();
+  const cache = createSweepCache(dir, { body: { latitude_ne: 44 }, perPage: 25 });
+  const pageResult = { data: [{ id: 'loc-1' }], page: 1, totalPages: 1 };
+  cache.setPage(1, pageResult);
+
+  const old = new Date(2000, 0, 1);
+  fs.utimesSync(cache.pageFile(1), old, old);
+
+  assert.equal(cache.getPage(1, 0), null, 'expired page must be treated as absent so it gets re-fetched');
+  assert.deepEqual(cache.getPage(1), pageResult, 'without a TTL the page still serves from disk');
+
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('createSweepCache keeps different queries in separate caches', () => {
+  const dir = tempDir();
+  const withFilter = createSweepCache(dir, { body: { latitude_ne: 44, power_min: 43 }, perPage: 25 });
+  const withoutFilter = createSweepCache(dir, { body: { latitude_ne: 44 }, perPage: 25 });
+  const otherPageSize = createSweepCache(dir, { body: { latitude_ne: 44 }, perPage: 1 });
+
+  withFilter.setPage(1, { data: [{ id: 'loc-1' }], page: 1, totalPages: 1 });
+
+  assert.deepEqual(withFilter.getPage(1), { data: [{ id: 'loc-1' }], page: 1, totalPages: 1 });
+  assert.equal(withoutFilter.getPage(1), null, 'a different body must not reuse pages');
+  assert.equal(otherPageSize.getPage(1), null, 'a different per_page must not reuse pages');
 
   fs.rmSync(dir, { recursive: true });
 });

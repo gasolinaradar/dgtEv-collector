@@ -1,5 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 const { createRevePublicClient, REVE_PUBLIC_BASE_URL, DEFAULT_MAX_PAGES } = require('../src/reve-public');
 
 const silentLogger = { info: () => {}, warn: () => {}, debug: () => {} };
@@ -532,4 +535,65 @@ test('fetchAllLocations stops early after too many consecutive page failures', a
   const locations = await client.fetchAllLocations({ requestDelayMs: 0, maxConsecutivePageFailures: 3, maxPages: 1000 });
   assert.deepEqual(locations, []);
   assert.equal(calls, 3, 'stops after 3 consecutive page failures instead of trying maxPages times');
+});
+
+test('fetchAllLocations with cacheDir: a second run replays pages from disk instead of re-requesting them', async () => {
+  let calls = 0;
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      calls += 1;
+      const page = config.params.page;
+      const data_ = page <= 2 ? [{ id: `loc-${page}` }] : [];
+      return {
+        status: 200,
+        data: { data: data_, pagination: { page, per_page: 1, total_pages: 2, total_count: 2 } },
+      };
+    },
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reve-public-cache-'));
+  const client = createRevePublicClient({ acknowledgeUnsupported: true, httpClient: fakeHttpClient, logger: silentLogger });
+  const opts = { requestDelayMs: 0, perPage: 1, cacheDir: dir };
+
+  try {
+    const sweeps = [];
+    for (let run = 0; run < 2; run++) {
+      sweeps.push(await client.fetchAllLocations(opts));
+    }
+    assert.equal(calls, 3, 'run 2 must not re-request the 2 cached pages — only the one end-probe request');
+    assert.deepEqual(sweeps[0], sweeps[1]);
+  } finally {
+    fs.rmSync(dir, { recursive: true });
+  }
+});
+
+test('fetchLocationsSweep with cacheDir: next run resumes from cache and still detects a completed sweep', async () => {
+  let calls = 0;
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      calls += 1;
+      const page = config.params.page;
+      const data_ = page <= 3 ? [{ id: `loc-${page}` }] : [];
+      return {
+        status: 200,
+        data: { data: data_, pagination: { page, per_page: 1, total_pages: 3, total_count: 3 } },
+      };
+    },
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reve-public-cache-'));
+  const client = createRevePublicClient({ acknowledgeUnsupported: true, httpClient: fakeHttpClient, logger: silentLogger });
+  const opts = { requestDelayMs: 0, perPage: 1, cacheDir: dir };
+
+  try {
+    const first = await client.fetchLocationsSweep(opts);
+    assert.equal(first.completedSweep, true);
+    assert.equal(calls, 3);
+
+    const second = await client.fetchLocationsSweep(opts);
+    assert.deepEqual(second.locations.map((l) => l.id), ['loc-1', 'loc-2', 'loc-3']);
+    assert.equal(second.completedSweep, true);
+    assert.equal(second.nextPage, 1, 'cursor wraps back to 1 after a cached completed sweep');
+    assert.equal(calls, 4, 'only the end probe hits the network — cached pages are skipped');
+  } finally {
+    fs.rmSync(dir, { recursive: true });
+  }
 });

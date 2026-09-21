@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { createSweepCache } = require('./cache');
 
 const REVE_PUBLIC_BASE_URL = 'https://www.mapareve.es/api/public/v1';
 const DEFAULT_TIMEOUT = 30000;
@@ -75,9 +76,13 @@ async function* streamLocationPages(httpClient, opts = {}) {
     logger = console,
     maxConsecutivePageFailures = 3,
     reportProgress,
+    cacheDir,
+    cacheTtlMs,
     ...rest
   } = opts;
   const emitProgress = typeof reportProgress === 'function' ? reportProgress : () => {};
+  const sweepBody = { ...SPAIN_BBOX, ...filters };
+  const sweepCache = cacheDir ? createSweepCache(cacheDir, { body: sweepBody, perPage }) : null;
 
   let page = startPage;
   let totalPages = null;
@@ -93,6 +98,25 @@ async function* streamLocationPages(httpClient, opts = {}) {
       );
       break;
     }
+
+    if (sweepCache) {
+      const cached = sweepCache.getPage(page, cacheTtlMs);
+      if (cached) {
+        pagesFetched += 1;
+        logger.info(`Reve public locations page ${page} served from cache`, {
+          page,
+          totalPages: cached.totalPages,
+        });
+        emitProgress(
+          cached.totalPages ? Math.min(99, Math.round((page / cached.totalPages) * 100)) : undefined,
+          { stage: 'reve_public_locations_sweep', page, totalPages: cached.totalPages, fromCache: true },
+        );
+        yield cached;
+        page += 1;
+        continue;
+      }
+    }
+
     if (pagesFetched > 0) await sleep(requestDelayMs);
 
     logger.info(`Requesting Reve public locations page ${page}`, { page, perPage });
@@ -153,6 +177,7 @@ async function* streamLocationPages(httpClient, opts = {}) {
     });
 
     if (data.length === 0) break;
+    if (sweepCache) sweepCache.setPage(page, { data, page, totalPages });
     yield { data, page, totalPages };
     page += 1;
   }

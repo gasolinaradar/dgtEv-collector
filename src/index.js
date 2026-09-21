@@ -1,7 +1,7 @@
 const { createDgtEvCollector } = require('./collector');
 const { fetchStations, streamStations, enrichStations } = require('./fetch');
 const { createReveClient } = require('./reve');
-const { createReveCache } = require('./cache');
+const { createReveCache, createSweepCache } = require('./cache');
 const { createRevePublicClient } = require('./reve-public');
 
 module.exports = {
@@ -11,5 +11,6 @@ module.exports = {
   enrichStations,
   createReveClient,
   createReveCache,
+  createSweepCache,
   createRevePublicClient,
 };
