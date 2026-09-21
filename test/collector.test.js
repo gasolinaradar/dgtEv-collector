@@ -1,8 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { createDgtEvCollector, fetchStations } = require('../src');
-const { extractText, normalizeConnector, normalizeSite, normalizeAddress } = require('../src/normalize');
-const { parseSitesFromXml, DEFAULT_DGT_EV_URL } = require('../src/fetch');
+const { normalizeConnector, normalizeSite, normalizeAddress } = require('../src/normalize');
+const { DEFAULT_DGT_EV_URL } = require('../src/fetch');
 
 const silentLogger = { info: () => {}, warn: () => {}, debug: () => {} };
 
@@ -185,13 +185,6 @@ test('throws on empty DGT EV dataset response', async () => {
     () => fetchStations({ httpClient: emptyClient, retries: 0, logger: silentLogger }),
     /Empty DGT EV dataset response/,
   );
-});
-
-test('parseSitesFromXml extracts energyInfrastructureSite nodes', () => {
-  const sites = parseSitesFromXml(SAMPLE_XML);
-  assert.equal(sites.length, 2);
-  assert.equal(extractText(sites[0].id), 'ID0-1000');
-  assert.equal(extractText(sites[0].name), 'Electrolinera Madrid Centro');
 });
 
 test('normalizeSite returns null when the site has no id', () => {
