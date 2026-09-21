@@ -1,5 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 const {
   enrichStationsPublic,
   normalizeRevePublicLocation,
@@ -701,4 +704,47 @@ test('enrichStationsPublic keeps only the best candidate per station even when m
   // only 2 ever get normalized (the initial best, then the true best that replaces it) —
   // nowhere near the 100 that merely passed the coarse coordinate-only proximity check.
   assert.equal(sweepLog.meta.kept, 2);
+});
+
+test('enrichStationsPublic with cacheDir: the second run skips already-fetched pages and yields the same enrichment', async () => {
+  const pages = {
+    1: samplePublicLocation({ id: 'reve-pub-1', coordinates: { latitude: '40.0', longitude: '-3.0' } }),
+    2: samplePublicLocation({ id: 'reve-pub-2', coordinates: { latitude: '41.0', longitude: '-4.0' } }),
+    3: samplePublicLocation({ id: 'reve-pub-3', coordinates: { latitude: '42.0', longitude: '-5.0' } }),
+  };
+  let calls = 0;
+  const fakeHttpClient = {
+    post: async (url, data, config) => {
+      calls += 1;
+      const page = config.params.page;
+      const loc = pages[page];
+      return {
+        status: 200,
+        data: { data: loc ? [loc] : [], pagination: { page, per_page: 1, total_pages: 3, total_count: 3 } },
+      };
+    },
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enrich-public-cache-'));
+  const stations = [
+    { sourceStationId: 'dgt-1', location: { type: 'Point', coordinates: [-5.0, 42.0] }, prices: undefined, availability: undefined },
+  ];
+  const opts = {
+    acknowledgeUnsupported: true,
+    httpClient: fakeHttpClient,
+    logger: silentLogger,
+    thresholdMeters: 5000,
+    cacheDir: dir,
+  };
+
+  try {
+    const first = await enrichStationsPublic(stations, opts);
+    assert.equal(calls, 3);
+
+    const second = await enrichStationsPublic(stations, opts);
+    assert.equal(calls, 4, 'run 2 replays the 3 already-fetched pages from cache, only probing the end once');
+    assert.equal(second[0].reveLocationId, 'reve-pub-3');
+    assert.equal(second[0].reveLocationId, first[0].reveLocationId, 'enrichment output must be identical from cache');
+  } finally {
+    fs.rmSync(dir, { recursive: true });
+  }
 });

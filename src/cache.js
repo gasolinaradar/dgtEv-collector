@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) {
@@ -156,8 +157,51 @@ function createReveCache(dirPath) {
   };
 }
 
+// Page cache for flat sweeps (p. ej. el barrido completo del source público /api/public/v1):
+// un fichero JSON por página (con su totalPages) + un meta-curso con la siguiente página. La
+// clave incluye body y per_page para que filtros distintos no compartan páginas. getPage acepta
+// un TTL: sin él (undefined) la página se sirve siempre desde disco; con él, se re-fetchea cuando
+// caduca. El propio cache ES el cursor: basta con saber qué páginas hay escritas en disco para
+// saber qué saltarse.
+function createSweepCache(dirPath, { body, perPage } = {}) {
+  const key = createHash('sha1').update(JSON.stringify({ body, perPage })).digest('hex').slice(0, 12);
+  const cacheDir = path.join(dirPath, `sweep-locations-${key}`);
+  const pagesDir = path.join(cacheDir, 'pages');
+  ensureDir(pagesDir);
+
+  const metaFile = path.join(cacheDir, 'meta.json');
+  const loadMeta = () => readJson(metaFile) || {};
+  const saveMeta = (meta) => writeJson(metaFile, meta);
+
+  return {
+    pageFile(page) {
+      return path.join(pagesDir, `${page}.json`);
+    },
+
+    getPage(page, ttlMs) {
+      const file = this.pageFile(page);
+      if (typeof ttlMs === 'number') {
+        try {
+          if (Date.now() - fs.statSync(file).mtimeMs > ttlMs) return null;
+        } catch {
+          return null;
+        }
+      }
+      return readJson(file);
+    },
+
+    setPage(page, pageResult) {
+      writeJson(path.join(pagesDir, `${page}.json`), pageResult);
+      saveMeta({ nextPage: page + 1, totalPages: pageResult.totalPages, updatedAt: new Date().toISOString() });
+    },
+
+    loadMeta,
+  };
+}
+
 module.exports = {
   createReveCache,
+  createSweepCache,
   readJson,
   writeJson,
 };

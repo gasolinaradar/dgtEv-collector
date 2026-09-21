@@ -162,6 +162,8 @@ async function enrichStationsPublic(stations, options = {}) {
     perPage = 25,
     maxPages = DEFAULT_MAX_PAGES,
     reportProgress,
+    cacheDir,
+    cacheTtlMs,
   } = options;
   const emitProgress = typeof reportProgress === 'function' ? reportProgress : () => {};
 
@@ -176,7 +178,14 @@ async function enrichStationsPublic(stations, options = {}) {
   let kept = 0;
 
   try {
-    for await (const page of reveClient.streamLocations({ filters, perPage, maxPages, reportProgress })) {
+    for await (const page of reveClient.streamLocations({
+      filters,
+      perPage,
+      maxPages,
+      reportProgress,
+      cacheDir,
+      cacheTtlMs,
+    })) {
       for (const loc of page) {
         fetched += 1;
 
