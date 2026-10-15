@@ -1,12 +1,18 @@
+<div align="center">
+
 # @gasolinaradar/dgt-ev-collector
 
-<!-- EN -->
+**EN:** Collector for the **official DGT EV charging station dataset** (Spain). It streams the public DATE X2 / energy-infrastructure XML published by the Spanish Directorate-General for Traffic (DGT), parses every charging site with its connectors, and returns **normalized, ready-to-use** EV charging stations.
 
-A Node.js collector for the **official DGT EV charging station dataset** (Spain). It downloads the public DATE X2/energy-infrastructure XML from the Spanish Directorate-General for Traffic (DGT), parses every charging site (`energyInfrastructureSite`) with its connectors, and returns a **normalized, ready-to-use** array of EV charging stations.
+**ES:** Collector del **dataset oficial de puntos de recarga de vehículos eléctricos de la DGT** (España). Lee en streaming el XML público DATE X2 de infraestructura energética publicado por la Dirección General de Tráfico (DGT), parsea cada punto de recarga con sus conectores y devuelve estaciones de recarga **normalizadas y listas para usar**.
 
-<!-- ES -->
+[![npm version](https://img.shields.io/npm/v/%40gasolinaradar%2Fdgt-ev-collector.svg?label=npm)](https://www.npmjs.com/package/@gasolinaradar/dgt-ev-collector)
+[![license MIT](https://img.shields.io/npm/l/%40gasolinaradar%2Fdgt-ev-collector.svg)](https://www.npmjs.com/package/@gasolinaradar/dgt-ev-collector)
+[![node >=18](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/gasolinaradar/dgt-ev-collector/pulls)
+![Spain EV charging](https://img.shields.io/badge/Spain-EV%20charging-blue.svg)
 
-Collector de Node.js para el **dataset oficial de puntos de recarga de vehículos eléctricos de la DGT** (España). Descarga el XML público DATE X2 de infraestructura energética de la Dirección General de Tráfico (DGT), parsea cada punto de recarga (`energyInfrastructureSite`) con sus conectores y devuelve un array de estaciones de recarga **normalizado y listo para usar**.
+</div>
 
 ---
 
@@ -60,6 +66,8 @@ Collector de Node.js para el **dataset oficial de puntos de recarga de vehículo
 npm install @gasolinaradar/dgt-ev-collector
 ```
 
+Requires **Node.js >= 18** / Requiere **Node.js >= 18**.
+
 ---
 
 ## Quick start / Inicio rápido
@@ -80,9 +88,16 @@ main();
 
 ## API
 
+Brief overview below; the full reference (including enrichment and progress reporting) is collapsible so the page stays skimmable.
+Vista general a continuación; la referencia completa (incluido enriquecimiento y reporte de progreso) está en bloques colapsables para que la página se lea de un vistazo.
+
+<details>
+<summary><strong>Full API reference / Referencia completa de la API</strong></summary>
+
 ### `fetchStations(options?) → Promise<Station[]>`
 
 Downloads the XML, parses the sites and returns normalized EV charging stations in one step.
+Descarga el XML, parsea los puntos y devuelve las estaciones normalizadas de una sola vez.
 
 ```js
 const { fetchStations } = require('@gasolinaradar/dgt-ev-collector');
@@ -97,9 +112,10 @@ const stations = await fetchStations({
 ### `createDgtEvCollector(options?) → Collector`
 
 Returns an object matching the common **collector contract** used by ingestion pipelines:
+Devuelve un objeto que cumple el **contrato de collector** habitual de los pipelines de ingesta:
 
 ```js
-{ name: 'dgt-ev', country: 'ES', fetch(context), stream(context) }
+{ name: 'dgt-ev', country: 'ES', fetch(context), stream(context), enrich(stations, options) }
 ```
 
 ```js
@@ -116,12 +132,19 @@ const stations = await dgtEvCollector.fetch({
 });
 ```
 
-### `streamStations(options?, hooks?) → AsyncGenerator<Station>` (recommended for large runs)
+`collector.stream(context)` is the streaming variant (same async generator as `streamStations`), and `collector.enrich(stations, options)` enriches an already-fetched array with Reve data.
+`collector.stream(context)` es la variante en streaming (el mismo async generator que `streamStations`), y `collector.enrich(stations, options)` enriquece un array ya obtenido con datos de Reve.
+
+### `streamStations(options?, hooks?) → AsyncGenerator<Station>` (recommended for large runs / recomendado para ejecuciones grandes)
 
 Downloads and parses the XML as a stream and `yield`s each normalized station as soon as
 it's ready, without ever materializing the full document or the full result array in
 memory. Backpressure is automatic: the generator only reads more of the HTTP response once
 you consume the previous `yield`, so it's safe to pair with e.g. batched DB upserts.
+Descarga y parsea el XML como stream y hace `yield` de cada estación normalizada en cuanto
+está lista, sin materializar nunca el documento completo ni el array de resultados completo
+en memoria. El backpressure es automático: el generador solo lee más de la respuesta HTTP
+cuando consumes el `yield` anterior, así que es seguro combinarlo con upserts por lotes.
 
 ```js
 const { streamStations } = require('@gasolinaradar/dgt-ev-collector');
@@ -143,136 +166,14 @@ if (batch.length > 0) {
 `fetchStations()` is still available and internally just drains `streamStations()` into an
 array — kept for backwards compatibility, but it re-materializes the whole dataset in
 memory, so prefer `streamStations`/`collector.stream()` for the real ~80+ MB feed.
+`fetchStations()` sigue disponible y por dentro solo vacía `streamStations()` en un array —
+se mantiene por compatibilidad, pero vuelve a cargar todo el dataset en memoria, así que
+para el feed real de ~80+ MB es preferible `streamStations`/`collector.stream()`.
 
----
+### Progress reporting / Reporte de progreso
 
-## Options / Opciones
-
-| Option    | Type                     | Default | Description                                                        |
-| --------- | ------------------------ | ------- | ------------------------------------------------------------------ |
-| `url`     | `string \| () => string` | DGT URL | Dataset URL. As a function, it is evaluated on every fetch.        |
-| `country` | `string \| () => string` | `ES`    | Country code attached to every normalized station.                 |
-| `timeout` | `number`                 | `20000` | HTTP timeout in milliseconds.                                      |
-| `retries` | `number`                 | `3`     | Retry attempts before failing.                                     |
-| `logger`  | `{ info, warn, debug }`  | `console` | Injectable logger.                                              |
-| `httpClient` | `{ get(url, opts) }`  | `axios` | Injectable HTTP client (useful for tests or custom TLS settings). |
-| `enrich`  | `object`                 | `undefined` | Enrichment options for Reve API. See [Enrichment](#enrichment--enriquecimiento). |
-
-| Opción    | Tipo                        | Por defecto | Descripción                                                         |
-| --------- | --------------------------- | ----------- | ------------------------------------------------------------------- |
-| `url`     | `string \| () => string`    | URL DGT     | URL del dataset. Como función, se evalúa en cada fetch.             |
-| `country` | `string \| () => string`    | `ES`        | Código de país que se añade a cada estación normalizada.            |
-| `timeout` | `number`                    | `20000`     | Timeout HTTP en milisegundos.                                       |
-| `retries` | `number`                    | `3`         | Intentos de reintento antes de fallar.                              |
-| `logger`  | `{ info, warn, debug }`     | `console`   | Logger inyectable.                                                  |
-| `httpClient` | `{ get(url, opts) }`     | `axios`     | Cliente HTTP inyectable (útil en tests o para configuración TLS personalizada). |
-| `enrich`  | `object`                    | `undefined` | Opciones de enriquecimiento con API Reve. Ver [Enriquecimiento](#enrichment--enriquecimiento). |
-
-> **Note:** When `httpClient` is injected, the collector does not build any HTTP client itself. Pass an axios instance with your own TLS settings (e.g. `rejectUnauthorized`) if you need custom certificate validation. The collector requests `responseType: 'stream'`; a custom client may resolve `response.data` either as a real stream (Readable / any async-iterable of chunks) for true O(1)-memory streaming, or as a plain string/Buffer (e.g. simple test doubles) — both are supported transparently.
-
-> **Nota:** Cuando se inyecta `httpClient`, el collector no construye ningún cliente HTTP propio. Pasa una instancia de axios con tu propia configuración TLS (p. ej. `rejectUnauthorized`) si necesitas validación de certificados personalizada. El collector pide `responseType: 'stream'`; un cliente personalizado puede resolver `response.data` bien como un stream real (Readable / cualquier async-iterable de trozos) para streaming real con memoria O(1), o bien como un string/Buffer plano (p. ej. dobles de test sencillos) — ambos casos se soportan de forma transparente.
-
----
-
-## Output schema / Esquema de salida
-
-Each normalized station looks like this / Cada estación normalizada tiene esta forma:
-
-```js
-{
-  source: 'dgt-ev',
-  country: 'ES',
-  sourceStationId: 'ID0-1000',
-  name: 'Electrolinera Madrid Centro',
-  address: 'Calle Mayor 1',
-  municipality: 'Madrid',
-  province: 'Madrid',
-  postalCode: '28013',
-  schedule: '24 horas',
-  services: ['ev_charging', 'CAFE'],
-  connectors: [
-    {
-      type: 'IEC_62196_T2',
-      format: 'SOCKET',
-      mode: 'MODE_3',
-      maxPowerKw: 22,
-      voltageV: 230,
-      maxCurrentA: 32,
-    },
-  ],
-  typeOfSite: 'onstreet',           // from DGT XML, if present
-  authenticationMethods: ['rfid'],   // from DGT XML, if present
-  operator: { name: 'Wenea', website: 'www.wenea.es' }, // from DGT XML, if present
-  location: {
-    type: 'Point',
-    coordinates: [-3.7038, 40.4168], // [longitude, latitude]
-  },
-  prices: undefined,                 // populated by Reve enrichment
-  availability: undefined,           // populated by Reve enrichment
-  reveLocationId: undefined,         // populated by Reve enrichment
-  lastUpdated: Date,
-}
-```
-
-When enriched with Reve data (`enrich.reveApiKey`), the fields are populated:
-
-```js
-{
-  // ... all DGT fields above ...
-  typeOfSite: 'onstreet',
-  operator: { name: 'Wenea', website: 'www.wenea.es' },
-  reveLocationId: 'reve-abc-123',
-  connectors: [             // same array as before, now annotated with live status when matched
-    { type: 'IEC_62196_T2', format: 'SOCKET', mode: 'MODE_3', maxPowerKw: 22, voltageV: 230, maxCurrentA: 32,
-      status: 'AVAILABLE', evseId: 'ES*ACM*E1*1' },
-  ],
-  prices: [                // each entry tagged with the connector/EVSE it came from
-    { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
-    // two PARKING_TIME entries, same connector, different price — NOT a duplicate: each
-    // applies under a different `restrictions` band (free for the first hour, then paid)
-    { type: 'PARKING_TIME', price: 0, currency: 'EUR', stepSize: 60, restrictions: { max_duration: 3600 }, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
-    { type: 'PARKING_TIME', price: 3, currency: 'EUR', stepSize: 60, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
-  ],
-  availability: {
-    status: 'AVAILABLE',   // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | PLANNED | REMOVED | UNKNOWN
-    evseCount: 2,
-    lastUpdated: '2026-08-25T10:00:00Z',
-    evses: [                // per-EVSE breakdown — e.g. "fast one is broken, slow one is free"
-      { evseId: 'ES*ACM*E1*1', status: 'AVAILABLE', connectors: [{ connectorId: 'conn-1', standard: 'IEC_62196_T2', powerType: 'AC_3_PHASE', maxPowerW: 22000 }] },
-      { evseId: 'ES*ACM*E1*2', status: 'OUTOFORDER', connectors: [{ connectorId: 'conn-2', standard: 'IEC_62196_T2_COMBO', powerType: 'DC', maxPowerW: 150000 }] },
-    ],
-  },
-}
-```
-
-Notes / Notas:
-
-- `connectors` is `undefined` when a site declares no connectors.
-- Coordinates are `[longitude, latitude]` (GeoJSON order). Sites that cannot be resolved with coordinates are skipped (logged as warnings).
-- `prices`, `availability`, and `reveLocationId` are `undefined` until enrichment is enabled.
-- `typeOfSite`, `authenticationMethods`, and `operator` are extracted from DGT XML when present.
-- Every `prices[]` entry and every `availability.evses[].connectors[]` entry carries the same
-  `connectorId` (and `evseId`) when the underlying connector matches — that's the only reliable
-  way to relate a price to a specific physical connector/EVSE.
-- A `prices[]` entry only carries `restrictions` (raw OCPI tariff-element restrictions, e.g.
-  `max_duration`, `start_time`/`end_time`) when the underlying tariff element declares one — its
-  absence means that entry applies unconditionally. **Two entries with the same `type` and
-  `connectorId` but different `price` are not duplicates**: they're separate time/duration bands
-  from the same OCPI tariff (e.g. free parking for the first hour, then billed per minute) — read
-  `restrictions` to tell them apart instead of assuming the larger/smaller one is "the" price.
-- The top-level `connectors` array (parsed straight from DGT XML) has **no id of its own**, so
-  when enrichment is enabled each entry gets a best-effort `status` (and `evseId`, when
-  unambiguous) merged in from `availability.evses[]` — matched by connector type (DGT's own
-  vocabulary, e.g. `iec62196T2`, mapped to the OCPI equivalent Reve uses, e.g. `IEC_62196_T2`)
-  plus power, allowing for kW↔W rounding. A connector is left **without** `status`/`evseId`
-  when: its DGT type has no known OCPI mapping, or it matches several Reve connectors that
-  disagree on status (ambiguous — DGT's connector list has no id to disambiguate with, e.g. a
-  station whose XML lists the same connector twice). Absence of `status` on a connector does
-  **not** mean it's down; check `availability.evses[]` for the authoritative per-EVSE state.
-
----
-
-## Progress reporting / Reporte de progreso
+<details>
+<summary><strong>Progress hooks, stages and enrichment phase / Hooks, fases y fase de enriquecimiento</strong></summary>
 
 The collector accepts an optional `context.reportProgress(percent, metadata)` callback.
 **If `options.enrich` is set, the same callback also gets called during the Reve
@@ -327,9 +228,12 @@ mismo usando `stage` (p. ej. DGT = 0-50% de la barra combinada, Reve = 50-100%) 
 librería no reescala los números por su cuenta, así que quien no use `enrich` sigue viendo
 exactamente el 5/35/70/100 de siempre.
 
----
+</details>
 
-## Enrichment / Enriquecimiento
+### Enrichment / Enriquecimiento
+
+<details>
+<summary><strong>Reve enrichment API, sources, rate limit, matching and memory / API de enriquecimiento Reve, fuentes, límite, matching y memoria</strong></summary>
 
 The collector can enrich DGT stations with **real-time prices and availability** from
 Red Eléctrica's Reve (mapareve.es). There are two underlying sources — `enrichStations()`
@@ -385,7 +289,7 @@ ubicación devuelta por `POST /locations` que conserva solo los campos que usa e
 inspeccionar los datos de origen sin el coste de memoria de retener toda la ubicación Reve. Para
 volver a obtener el objeto completo, usa `GET /api/public/v1/locations/{reveLocationId}`.
 
-### `source: 'external'` — documented, stable, rate-limited
+#### `source: 'external'` — documented, stable, rate-limited
 
 Requires a free API key (request at
 [mapareve.es/api-contacto](https://www.mapareve.es/api-contacto)).
@@ -393,7 +297,7 @@ Requires a free API key (request at
 Requiere una API key gratuita (solicitar en
 [mapareve.es/api-contacto](https://www.mapareve.es/api-contacto)).
 
-#### How it works / Cómo funciona
+##### How it works / Cómo funciona
 
 1. Fetches Reve **locations first** (see Rate limit below for why), then operational status,
    then tariffs — all paginated, 100/page.
@@ -406,7 +310,7 @@ Requiere una API key gratuita (solicitar en
 5. Merges prices, availability, and operator data into the station object, resolving prices/
    availability from the full accumulated status/tariffs cache too (not just this call's fetch).
 
-#### Rate limit / Límite de velocidad
+##### Rate limit / Límite de velocidad
 
 The Reve API allows **5 requests per hour**, shared across locations + status + tariffs in that
 order — **locations first**, always, because without a location there's nothing to match a DGT
@@ -424,7 +328,7 @@ The collector:
   attempt doesn't cause the next attempt to (incorrectly) ask Reve for only what changed since
   the failed attempt's timestamp.
 
-### `source: 'public'` — undocumented, no key, no rate limit
+#### `source: 'public'` — undocumented, no key, no rate limit
 
 **EN:** Talks to `https://www.mapareve.es/api/public/v1` — the internal, unauthenticated API
 the mapareve.es map itself uses in the browser, reverse-engineered from its JS bundle. It
@@ -533,7 +437,7 @@ puede seguir quedándose sin memoria — así que en un proceso muy limitado con
 un `maxPages` menor por llamada, ejecutarlo con menos frecuencia, o subir el límite de
 memoria del contenedor.
 
-### Usage / Uso
+##### Usage / Uso
 
 ```js
 const { fetchStations, streamStations, createDgtEvCollector } = require('@gasolinaradar/dgt-ev-collector');
@@ -580,7 +484,7 @@ const enriched = await collector.enrich(existingStations, {
 });
 ```
 
-### Enrich options / Opciones de enriquecimiento
+##### Enrich options / Opciones de enriquecimiento
 
 | Option | Type | Default | Applies to | Description |
 | --- | --- | --- | --- | --- |
@@ -594,9 +498,167 @@ const enriched = await collector.enrich(existingStations, {
 | `perPage` | `number` | `25` | public | Confirmed max accepted by `POST /locations`; higher values 400. |
 | `filters` | `object` | `{}` | public | Extra `POST /locations` body fields (bbox override, `cpo_ids`, `power_min`, `connector_types`, ...). |
 
+</details>
+
+</details>
+
 ---
 
-## Data source / Fuente de datos
+## Configuration / Configuración
+
+<details>
+<summary><strong>Collector options / Opciones del collector</strong></summary>
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `url` | `string \| () => string` | DGT URL | Dataset URL. As a function, it is evaluated on every fetch.<br>*ES:* URL del dataset. Como función, se evalúa en cada fetch. |
+| `country` | `string \| () => string` | `ES` | Country code attached to every normalized station.<br>*ES:* Código de país que se añade a cada estación normalizada. |
+| `timeout` | `number` | `20000` | HTTP timeout in milliseconds.<br>*ES:* Timeout HTTP en milisegundos. |
+| `retries` | `number` | `3` | Retry attempts before failing.<br>*ES:* Intentos de reintento antes de fallar. |
+| `logger` | `{ info, warn, debug }` | `console` | Injectable logger.<br>*ES:* Logger inyectable. |
+| `httpClient` | `{ get(url, opts) }` | `axios` | Injectable HTTP client (useful for tests or custom TLS settings).<br>*ES:* Cliente HTTP inyectable (útil en tests o para configuración TLS personalizada). |
+| `enrich` | `object` | `undefined` | Enrichment options for the Reve API. See [Enrichment](#enrichment--enriquecimiento).<br>*ES:* Opciones de enriquecimiento con API Reve. Ver [Enriquecimiento](#enrichment--enriquecimiento). |
+
+> **Note:** When `httpClient` is injected, the collector does not build any HTTP client itself. Pass an axios instance with your own TLS settings (e.g. `rejectUnauthorized`) if you need custom certificate validation. The collector requests `responseType: 'stream'`; a custom client may resolve `response.data` either as a real stream (Readable / any async-iterable of chunks) for true O(1)-memory streaming, or as a plain string/Buffer (e.g. simple test doubles) — both are supported transparently.
+
+> **Nota:** Cuando se inyecta `httpClient`, el collector no construye ningún cliente HTTP propio. Pasa una instancia de axios con tu propia configuración TLS (p. ej. `rejectUnauthorized`) si necesitas validación de certificados personalizada. El collector pide `responseType: 'stream'`; un cliente personalizado puede resolver `response.data` bien como un stream real (Readable / cualquier async-iterable de trozos) para streaming real con memoria O(1), o bien como un string/Buffer plano (p. ej. dobles de test sencillos) — ambos casos se soportan de forma transparente.
+
+</details>
+
+---
+
+## Station contract / Contrato de estación
+
+<details>
+<summary><strong>Normalized station shape and enrichment fields / Forma normalizada y campos de enriquecimiento</strong></summary>
+
+Each normalized station looks like this / Cada estación normalizada tiene esta forma:
+
+```js
+{
+  source: 'dgt-ev',
+  country: 'ES',
+  sourceStationId: 'ID0-1000',
+  name: 'Electrolinera Madrid Centro',
+  address: 'Calle Mayor 1',
+  municipality: 'Madrid',
+  province: 'Madrid',
+  postalCode: '28013',
+  schedule: '24 horas',
+  services: ['ev_charging', 'CAFE'],
+  connectors: [
+    {
+      type: 'IEC_62196_T2',
+      format: 'SOCKET',
+      mode: 'MODE_3',
+      maxPowerKw: 22,
+      voltageV: 230,
+      maxCurrentA: 32,
+    },
+  ],
+  typeOfSite: 'onstreet',           // from DGT XML, if present
+  authenticationMethods: ['rfid'],   // from DGT XML, if present
+  operator: { name: 'Wenea', website: 'www.wenea.es' }, // from DGT XML, if present
+  location: {
+    type: 'Point',
+    coordinates: [-3.7038, 40.4168], // [longitude, latitude]
+  },
+  prices: undefined,                 // populated by Reve enrichment
+  availability: undefined,           // populated by Reve enrichment
+  reveLocationId: undefined,         // populated by Reve enrichment
+  lastUpdated: Date,
+}
+```
+
+When enriched with Reve data (`enrich.reveApiKey`), the fields are populated:
+
+```js
+{
+  // ... all DGT fields above ...
+  typeOfSite: 'onstreet',
+  operator: { name: 'Wenea', website: 'www.wenea.es' },
+  reveLocationId: 'reve-abc-123',
+  connectors: [             // same array as before, now annotated with live status when matched
+    { type: 'IEC_62196_T2', format: 'SOCKET', mode: 'MODE_3', maxPowerKw: 22, voltageV: 230, maxCurrentA: 32,
+      status: 'AVAILABLE', evseId: 'ES*ACM*E1*1' },
+  ],
+  prices: [                // each entry tagged with the connector/EVSE it came from
+    { type: 'ENERGY', price: 0.35, currency: 'EUR', vat: 21, stepSize: 1, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
+    // two PARKING_TIME entries, same connector, different price — NOT a duplicate: each
+    // applies under a different `restrictions` band (free for the first hour, then paid)
+    { type: 'PARKING_TIME', price: 0, currency: 'EUR', stepSize: 60, restrictions: { max_duration: 3600 }, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
+    { type: 'PARKING_TIME', price: 3, currency: 'EUR', stepSize: 60, evseId: 'ES*ACM*E1*1', connectorId: 'conn-1' },
+  ],
+  availability: {
+    status: 'AVAILABLE',   // AVAILABLE | CHARGING | RESERVED | BLOCKED | INOPERATIVE | OUTOFORDER | PLANNED | REMOVED | UNKNOWN
+    evseCount: 2,
+    lastUpdated: '2026-08-25T10:00:00Z',
+    evses: [                // per-EVSE breakdown — e.g. "fast one is broken, slow one is free"
+      { evseId: 'ES*ACM*E1*1', status: 'AVAILABLE', connectors: [{ connectorId: 'conn-1', standard: 'IEC_62196_T2', powerType: 'AC_3_PHASE', maxPowerW: 22000 }] },
+      { evseId: 'ES*ACM*E1*2', status: 'OUTOFORDER', connectors: [{ connectorId: 'conn-2', standard: 'IEC_62196_T2_COMBO', powerType: 'DC', maxPowerW: 150000 }] },
+    ],
+  },
+}
+```
+
+Notes / Notas:
+
+- `connectors` is `undefined` when a site declares no connectors.
+- Coordinates are `[longitude, latitude]` (GeoJSON order). Sites that cannot be resolved with coordinates are skipped (logged as warnings).
+- `prices`, `availability`, and `reveLocationId` are `undefined` until enrichment is enabled.
+- `typeOfSite`, `authenticationMethods`, and `operator` are extracted from DGT XML when present.
+- Every `prices[]` entry and every `availability.evses[].connectors[]` entry carries the same
+  `connectorId` (and `evseId`) when the underlying connector matches — that's the only reliable
+  way to relate a price to a specific physical connector/EVSE.
+- A `prices[]` entry only carries `restrictions` (raw OCPI tariff-element restrictions, e.g.
+  `max_duration`, `start_time`/`end_time`) when the underlying tariff element declares one — its
+  absence means that entry applies unconditionally. **Two entries with the same `type` and
+  `connectorId` but different `price` are not duplicates**: they're separate time/duration bands
+  from the same OCPI tariff (e.g. free parking for the first hour, then billed per minute) — read
+  `restrictions` to tell them apart instead of assuming the larger/smaller one is "the" price.
+- The top-level `connectors` array (parsed straight from DGT XML) has **no id of its own**, so
+  when enrichment is enabled each entry gets a best-effort `status` (and `evseId`, when
+  unambiguous) merged in from `availability.evses[]` — matched by connector type (DGT's own
+  vocabulary, e.g. `iec62196T2`, mapped to the OCPI equivalent Reve uses, e.g. `IEC_62196_T2`)
+  plus power, allowing for kW↔W rounding. A connector is left **without** `status`/`evseId`
+  when: its DGT type has no known OCPI mapping, or it matches several Reve connectors that
+  disagree on status (ambiguous — DGT's connector list has no id to disambiguate with, e.g. a
+  station whose XML lists the same connector twice). Absence of `status` on a connector does
+  **not** mean it's down; check `availability.evses[]` for the authoritative per-EVSE state.
+
+</details>
+
+---
+
+## Testing / Pruebas
+
+Uses Node's built-in test runner (`node --test`). / Usa el runner de tests integrado de Node (`node --test`).
+
+| Command | What it does / Qué hace |
+| --- | --- |
+| `npm test` | Unit tests with mocked HTTP — includes the public-source client and enrichment. / Tests unitarios con HTTP simulado — incluye el cliente de fuente pública y el enriquecimiento. |
+| `npm run test:live` | Live run against the real DGT dataset. / Ejecución en vivo contra el dataset real de la DGT. |
+| `npm run test:live-public` | Live run against the real `/api/public/v1`, no key needed (~5 requests). / Ejecución en vivo contra `/api/public/v1` real, sin clave (~5 peticiones). |
+| `npm run test:live-compare` | Live side-by-side vs `/api/external/v1`; requires `REVE_API_KEY` and spends 1 of its 5 req/h. / Comparación en vivo contra `/api/external/v1`; requiere `REVE_API_KEY` y gasta 1 de sus 5 req/h. |
+
+<details>
+<summary><strong>Live-testing notes / Notas de los tests en vivo</strong></summary>
+
+- `test:live` downloads and parses the real ~80+ MB DGT XML, so it can take a while and needs network access.
+- `test:live-public` hits the undocumented public Reve endpoint (~5 requests) and needs no key.
+- `test:live-compare` requires `REVE_API_KEY` and consumes 1 of the external source's 5 requests/hour.
+- `test:live` descarga y parsea el XML real de la DGT de ~80+ MB, así que puede tardar y necesita red.
+- `test:live-public` llama al endpoint público no documentado de Reve (~5 peticiones) y no necesita clave.
+- `test:live-compare` requiere `REVE_API_KEY` y consume 1 de las 5 peticiones/hora de la fuente externa.
+
+</details>
+
+---
+
+## Ecosystem / Ecosistema
+
+<details>
+<summary><strong>Data source, consumers and interoperability / Fuente de datos, consumidores e interoperabilidad</strong></summary>
 
 **EN:** The data is the public EV charging station dataset of the Spanish Directorate-General for Traffic (DGT), published at:
 
@@ -604,41 +666,18 @@ const enriched = await collector.enrich(existingStations, {
 
 - `https://infocar.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml`
 
-This project is **not affiliated with** the Spanish State or DGT. The data belongs to the State and is provided "as is". See the legal documents below.
+This project is **not affiliated with** the Spanish State or DGT. The data belongs to the State and is provided "as is".
+Este proyecto **no está afiliado** al Estado español ni a la DGT. Los datos pertenecen al Estado y se proporcionan "tal cual".
 
-Este proyecto **no está afiliado** al Estado español ni a la DGT. Los datos pertenecen al Estado y se proporcionan "tal cual". Consulta los documentos legales a continuación.
+**Collector contract:** `createDgtEvCollector()` returns the common `{ name, country, fetch, stream, enrich }` shape used by ingestion pipelines, so it can be dropped into a multi-source collector set alongside other country collectors without changes.
+**Contrato de collector:** `createDgtEvCollector()` devuelve la forma común `{ name, country, fetch, stream, enrich }` que usan los pipelines de ingesta, así que puede encajarse en un conjunto multi-fuente junto a otros collectors de país sin cambios.
 
----
-
-## Legal / Legal
-
-**EN:**
-
-- [LEGAL.md](./LEGAL.md) — Legal notice and disclaimer (bilingual).
-- [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) — Data attribution and third-party licenses.
-- [LICENSE](./LICENSE) — MIT License (applies to this software, **not** to the underlying DGT data).
-
-**ES:**
-
-- [LEGAL.md](./LEGAL.md) — Aviso legal y descargo de responsabilidad (bilingüe).
-- [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) — Atribución de datos y licencias de terceros.
-- [LICENSE](./LICENSE) — Licencia MIT (aplica a este software, **no** a los datos subyacentes de la DGT).
-
----
-
-## Tests
-
-```bash
-npm test                 # unit tests (mocked HTTP) — includes the public-source client/enrichment
-npm run test:live        # live: real DGT dataset
-npm run test:live-public # live: real /api/public/v1, no key needed (~5 requests)
-REVE_API_KEY=xxx npm run test:live-compare  # live: side-by-side vs /api/external/v1 (spends 1 of its 5 req/h)
-```
+</details>
 
 ---
 
 ## License / Licencia
 
-**EN:** MIT. See [LICENSE](./LICENSE). The DGT data is **not** covered by this license; it is public information of the Spanish State.
+**EN:** MIT. See [LICENSE](./LICENSE) for the full text. The DGT data is **not** covered by this license; it is public information of the Spanish State. See [LEGAL.md](./LEGAL.md) for the official DGT dataset attribution and legal notes (independent, unofficial project; reuse conditions; no warranty; no endorsement), and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for data attribution and third-party licenses.
 
-**ES:** MIT. Consulta [LICENSE](./LICENSE). Los datos de la DGT **no** están cubiertos por esta licencia; son información pública del Estado español.
+**ES:** MIT. Consulta [LICENSE](./LICENSE) para el texto completo. Los datos de la DGT **no** están cubiertos por esta licencia; son información pública del Estado español. Consulta [LEGAL.md](./LEGAL.md) para la atribución y notas legales oficiales del dataset de la DGT (proyecto independiente y no oficial; condiciones de reutilización; sin garantía; sin respaldo), y [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) para la atribución de datos y licencias de terceros.
