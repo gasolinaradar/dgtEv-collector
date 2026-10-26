@@ -4,7 +4,7 @@ const { createSiteParser, parseSitesFromXml } = require('./siteParser');
 const { enrichStations } = require('./reve-enrich');
 
 const DEFAULT_DGT_EV_URL =
-  'https://infocar.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml';
+  'https://nap.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml';
 const DEFAULT_COUNTRY = 'ES';
 const DEFAULT_TIMEOUT = 20000;
 const DEFAULT_RETRIES = 3;
