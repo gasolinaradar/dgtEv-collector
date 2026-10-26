@@ -18,13 +18,13 @@
 
 **EN:** The data consumed by this library is **public information** published by the Spanish State through the DGT EV charging infrastructure endpoint:
 
-- `https://infocar.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml`
+- `https://nap.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml`
 
 The **data belongs to the Spanish State**. This project **does not own the data**. The library only transforms the raw payload into a normalized structure; it does not create, alter, or endorse the underlying information.
 
 **ES:** Los datos que consume esta librería son **información pública** publicada por el Estado español a través del endpoint de infraestructura de recarga de la DGT:
 
-- `https://infocar.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml`
+- `https://nap.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml`
 
 Los **datos pertenecen al Estado español**. Este proyecto **no es titular de los datos**. La librería solo transforma el payload original en una estructura normalizada; no crea, modifica ni respalda la información subyacente.
 

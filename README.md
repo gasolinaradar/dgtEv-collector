@@ -664,7 +664,7 @@ Uses Node's built-in test runner (`node --test`). / Usa el runner de tests integ
 
 **ES:** Los datos provienen del dataset público de puntos de recarga de vehículos eléctricos de la Dirección General de Tráfico (DGT), publicado en:
 
-- `https://infocar.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml`
+- `https://nap.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml`
 
 This project is **not affiliated with** the Spanish State or DGT. The data belongs to the State and is provided "as is".
 Este proyecto **no está afiliado** al Estado español ni a la DGT. Los datos pertenecen al Estado y se proporcionan "tal cual".

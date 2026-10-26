@@ -6,7 +6,7 @@ This product includes data from the Spanish State (Estado Español), published b
 
 Este producto incluye datos del Estado español, publicados por la Dirección General de Tráfico (DGT) a través de su feed abierto:
 
-- `https://infocar.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml`
+- `https://nap.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml`
 
 The data is public information subject to the reuse conditions of the Spanish public sector information regulations (Ley 37/2007, Ley 18/2015, Real Decreto 1495/2011). See [LEGAL.md](./LEGAL.md) for details.
 
